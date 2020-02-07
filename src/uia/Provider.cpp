@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -13,7 +13,6 @@
 SumatraUIAutomationProvider::SumatraUIAutomationProvider(HWND hwnd) :
     refCount(1), canvasHwnd(hwnd), startpage(nullptr), document(nullptr)
 {
-    dbghelp::LogCallstack();
     startpage = new SumatraUIAutomationStartPageProvider(hwnd, this);
 }
 
@@ -67,13 +66,11 @@ HRESULT STDMETHODCALLTYPE SumatraUIAutomationProvider::QueryInterface(REFIID rii
 
 ULONG STDMETHODCALLTYPE SumatraUIAutomationProvider::AddRef(void)
 {
-    dbghelp::LogCallstack();
     return InterlockedIncrement(&refCount);
 }
 
 ULONG STDMETHODCALLTYPE SumatraUIAutomationProvider::Release(void)
 {
-    dbghelp::LogCallstack();
     LONG res = InterlockedDecrement(&refCount);
     CrashIf(res < 0);
     if (0 == res)

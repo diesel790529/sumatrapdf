@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 // signfile produces a cryptographic signature of a given file
@@ -21,7 +21,7 @@
 #define ErrOut(msg, ...) fwprintf(stderr, TEXT(msg) TEXT("\n"), __VA_ARGS__)
 
 void ShowUsage(const WCHAR* exeName) {
-    ErrOut("Syntax: %s", path::GetBaseName(exeName));
+    ErrOut("Syntax: %s", path::GetBaseNameNoFree(exeName));
     ErrOut("\t[-cert CertName]\t- name of the certificate to use");      // when omitted uses first available
     ErrOut("\t[-out filename.out]\t- where to save the signature file"); // when omitted uses stdout
     ErrOut("\t[-comment #]\t\t- comment syntax for signed text files");  // needed when saving the signature into the
@@ -74,7 +74,7 @@ int main() {
         else if (is_arg("-pubkey", pubkeyPath))
             pubkeyPath = args.at(++i);
         else if (is_arg("-comment", inFileCommentSyntax)) {
-            auto tmp = str::conv::ToUtf8(args.at(++i));
+            auto tmp = strconv::ToUtf8(args.at(++i));
             inFileCommentSyntax.Set(tmp.StealData());
         } else if (!filePath)
             filePath = args.at(i);
@@ -154,7 +154,7 @@ int main() {
     // prepare data for signing
     size_t dataLen;
     {
-        OwnedData tmp(file::ReadFile(filePath));
+        AutoFree tmp(file::ReadFile(filePath));
         dataLen = tmp.size;
         data.Set(tmp.StealData());
     }

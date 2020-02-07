@@ -1,10 +1,10 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/GdiPlusUtil.h"
 #include "utils/WinUtil.h"
-#include "Colors.h"
+#include "AppColors.h"
 #include "ProgressUpdateUI.h"
 #include "Notifications.h"
 
@@ -141,9 +141,7 @@ void NotificationWnd::UpdateMessage(const WCHAR* message, int timeoutInMS, bool 
     }
 }
 
-static inline Color ToColor(COLORREF c) {
-    return Color(GetRValueSafe(c), GetGValueSafe(c), GetBValueSafe(c));
-}
+using namespace Gdiplus;
 
 static void NotificationWndOnPaint(HWND hwnd, NotificationWnd* wnd) {
     PAINTSTRUCT ps = {0};
@@ -158,7 +156,7 @@ static void NotificationWndOnPaint(HWND hwnd, NotificationWnd* wnd) {
 
     Graphics graphics(hdc);
     auto col = GetAppColor(AppColor::NotificationsBg);
-    SolidBrush br(ToColor(col));
+    SolidBrush br(GdiRgbFromCOLORREF(col));
     graphics.FillRectangle(&br, Rect(0, 0, rTmp.right - rTmp.left, rTmp.bottom - rTmp.top));
 
     if (wnd->highlight) {
@@ -181,7 +179,7 @@ static void NotificationWndOnPaint(HWND hwnd, NotificationWnd* wnd) {
     if (wnd->hasCancel) {
         rectMsg.dx -= 20;
     }
-    AutoFreeW text(win::GetText(hwnd));
+    AutoFreeWstr text(win::GetText(hwnd));
     rTmp = rectMsg.ToRECT();
     DrawText(hdc, text, -1, &rTmp, DT_SINGLELINE | DT_NOPREFIX);
 
@@ -196,7 +194,7 @@ static void NotificationWndOnPaint(HWND hwnd, NotificationWnd* wnd) {
         rect.dy = PROGRESS_HEIGHT;
 
         col = GetAppColor(AppColor::NotifcationsProgress);
-        Pen pen(ToColor(col));
+        Pen pen(GdiRgbFromCOLORREF(col));
         graphics.DrawRectangle(&pen, Rect(rect.x, rect.y, rect.dx, rect.dy));
 
         rect.x += 2;
@@ -204,7 +202,7 @@ static void NotificationWndOnPaint(HWND hwnd, NotificationWnd* wnd) {
         rect.y += 2;
         rect.dy -= 3;
 
-        br.SetColor(ToColor(col));
+        br.SetColor(GdiRgbFromCOLORREF(col));
         graphics.FillRectangle(&br, Rect(rect.x, rect.y, rect.dx, rect.dy));
     }
 
@@ -284,35 +282,33 @@ void Notifications::MoveBelow(NotificationWnd* fix, NotificationWnd* move) {
 }
 
 void Notifications::Remove(NotificationWnd* wnd) {
-    auto b = std::begin(this->wnds);
-    auto e = std::end(this->wnds);
-    auto pos = std::find(b, e, wnd);
-    if (pos == e) {
+    int pos = wnds.Remove(wnd);
+    if (pos < 0) {
         return;
     }
-    bool isFirst = (pos == b);
-    this->wnds.erase(pos);
-
-    // erase() invalidates iterators
-    b = std::begin(this->wnds);
-    e = std::end(this->wnds);
-
-    if (this->wnds.empty()) {
+    int n = wnds.size();
+    if (n == 0) {
         return;
     }
+
+    bool isFirst = (pos == 0);
 
     // TODO: this might be busted but I'm not sure what it's supposed
     // to do and it happens rarely. Would need to add a trigger for
     // visually testing notifications
     if (isFirst) {
-        auto* first = this->wnds[0];
+        auto* first = wnds[0];
         UINT flags = SWP_NOSIZE | SWP_NOZORDER;
         auto x = GetWndX(first);
         SetWindowPos(first->hwnd, nullptr, x, TOP_LEFT_MARGIN, 0, 0, flags);
     }
-    for (auto i = b + 1; i < e; i++) {
-        auto* prev = *(i - 1);
-        this->MoveBelow(prev, *i);
+    for (int i = pos; i < n; i++) {
+        if (i == 0) {
+            continue;
+        }
+        auto curr = wnds[i];
+        auto prev = wnds[i - 1];
+        MoveBelow(prev, curr);
     }
 }
 
@@ -388,7 +384,7 @@ void NotificationWnd::UpdateProgress(int current, int total) {
     }
     progress = limitValue(100 * current / total, 0, 100);
     if (hasProgress && progressMsg) {
-        AutoFreeW message(str::Format(progressMsg, current, total));
+        AutoFreeWstr message(str::Format(progressMsg, current, total));
         this->UpdateMessage(message);
     }
 }

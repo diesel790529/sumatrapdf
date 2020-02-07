@@ -1,13 +1,14 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
-#include "utils/DebugLog.h"
 #include "utils/FileUtil.h"
 #include "utils/SettingsUtil.h"
+#include "utils/Log.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #define INCLUDE_SETTINGSSTRUCTS_METADATA
 #include "SettingsStructs.h"
 #include "GlobalPrefs.h"
@@ -41,7 +42,7 @@ GlobalPrefs* NewGlobalPrefs(const char* data) {
     return (GlobalPrefs*)DeserializeStruct(&gGlobalPrefsInfo, data);
 }
 
-// TODO: return OwnedData
+// TODO: return std::string_view
 char* SerializeGlobalPrefs(GlobalPrefs* gp, const char* prevData, size_t* sizeOut) {
     if (!gp->rememberStatePerDocument || !gp->rememberOpenedFiles) {
         for (DisplayState* ds : *gp->fileStates) {

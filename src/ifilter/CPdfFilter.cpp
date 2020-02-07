@@ -1,12 +1,13 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/WinUtil.h"
 
-#include "BaseEngine.h"
-#include "PdfEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
+#include "EnginePdf.h"
 
 #include "FilterBase.h"
 #include "PdfFilter.h"
@@ -23,24 +24,26 @@ VOID CPdfFilter::CleanUp() {
 HRESULT CPdfFilter::OnInit() {
     CleanUp();
 
-    // TODO: PdfEngine::CreateFromStream never returns with
+    // TODO: EnginePdf::CreateFromStream never returns with
     //       m_pStream instead of a clone - why?
 
     // load content of PDF document into a seekable stream
     HRESULT res;
-    size_t len;
-    void* data = GetDataFromStream(m_pStream, &len, &res);
-    if (!data)
+    AutoFree data = GetDataFromStream(m_pStream, &res);
+    if (data.empty()) {
         return res;
+    }
 
-    ScopedComPtr<IStream> stream(CreateStreamFromData(data, len));
-    free(data);
-    if (!stream)
+    auto strm = CreateStreamFromData(data.as_view());
+    ScopedComPtr<IStream> stream(strm);
+    if (!stream) {
         return E_FAIL;
+    }
 
-    m_pdfEngine = PdfEngine::CreateFromStream(stream);
-    if (!m_pdfEngine)
+    m_pdfEngine = CreateEnginePdfFromStream(stream);
+    if (!m_pdfEngine) {
         return E_FAIL;
+    }
 
     m_state = STATE_PDF_START;
     m_iPageNo = 0;
@@ -62,7 +65,7 @@ static bool PdfDateParse(const WCHAR* pdfDate, SYSTEMTIME* timeOut) {
 }
 
 HRESULT CPdfFilter::GetNextChunkValue(CChunkValue& chunkValue) {
-    AutoFreeW str;
+    AutoFreeWstr str;
 
     switch (m_state) {
         case STATE_PDF_START:
@@ -107,10 +110,12 @@ HRESULT CPdfFilter::GetNextChunkValue(CChunkValue& chunkValue) {
 
         case STATE_PDF_CONTENT:
             while (++m_iPageNo <= m_pdfEngine->PageCount()) {
-                str.Set(m_pdfEngine->ExtractPageText(m_iPageNo, L"\r\n"));
-                if (str::IsEmpty(str.Get()))
+                str.Set(m_pdfEngine->ExtractPageText(m_iPageNo));
+                if (str::IsEmpty(str.Get())) {
                     continue;
-                chunkValue.SetTextValue(PKEY_Search_Contents, str, CHUNK_TEXT);
+                }
+                AutoFreeWstr str2 = str::Replace(str.get(), L"\n", L"\r\n");
+                chunkValue.SetTextValue(PKEY_Search_Contents, str2.get(), CHUNK_TEXT);
                 return S_OK;
             }
             m_state = STATE_PDF_END;

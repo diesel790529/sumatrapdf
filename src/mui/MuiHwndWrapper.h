@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 class Painter;
@@ -30,7 +30,9 @@ class HwndWrapper : public Control {
     void SetMaxSize(Size maxSize);
 
     void RequestLayout();
-    void MarkForRepaint() { markedForRepaint = true; }
+    void MarkForRepaint() {
+        markedForRepaint = true;
+    }
     void LayoutIfRequested();
     void SetHwnd(HWND hwnd);
     void OnPaint(HWND hwnd);

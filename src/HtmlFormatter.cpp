@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
@@ -6,13 +6,13 @@
 #include "utils/HtmlParserLookup.h"
 #include "utils/CssParser.h"
 #include "utils/HtmlPullParser.h"
+#include "utils/Log.h"
 #include "mui/Mui.h"
 #include "utils/Timer.h"
+
 // rendering engines
 #include "EbookBase.h"
 #include "HtmlFormatter.h"
-#define NOLOG 1
-#include "utils/DebugLog.h"
 
 /*
 Given size of a page, we format html into a set of pages. We handle only a small
@@ -110,7 +110,8 @@ DrawInstr DrawInstr::Anchor(const char* s, size_t len, RectF bbox) {
     return di;
 }
 
-StyleRule::StyleRule() : tag(Tag_NotFound), textIndentUnit(inherit), textAlign(Align_NotFound) {}
+StyleRule::StyleRule() : tag(Tag_NotFound), textIndentUnit(inherit), textAlign(Align_NotFound) {
+}
 
 // parses size in the form "1em", "3pt" or "15px"
 static void ParseSizeWithUnit(const char* s, size_t len, float* size, StyleRule::Unit* unit) {
@@ -707,7 +708,7 @@ void HtmlFormatter::EmitTextRun(const char* s, const char* end) {
         if (!resolved)
             currReparseIdx = s - htmlParser->Start();
 
-        size_t strLen = str::Utf8ToWcharBuf(s, end - s, buf, dimof(buf));
+        size_t strLen = strconv::Utf8ToWcharBuf(s, end - s, buf, dimof(buf));
         // soft hyphens should not be displayed
         strLen -= str::RemoveChars(buf, L"\xad");
         if (0 == strLen)
@@ -844,7 +845,7 @@ void HtmlFormatter::HandleTagFont(HtmlToken* t) {
     AttrInfo* attr = t->GetAttrByName("face");
     const WCHAR* faceName = CurrFont()->GetName();
     if (attr) {
-        size_t strLen = str::Utf8ToWcharBuf(attr->val, attr->valLen, buf, dimof(buf));
+        size_t strLen = strconv::Utf8ToWcharBuf(attr->val, attr->valLen, buf, dimof(buf));
         // multiple font names can be comma separated
         if (strLen > 0 && *buf != ',') {
             str::TransChars(buf, L",", L"\0");
@@ -1335,14 +1336,14 @@ void DrawHtmlPage(Graphics* g, mui::ITextRender* textDraw, Vec<DrawInstr>* drawI
     // draw, so first draw text and then paint everything else
     textDraw->SetTextColor(textColor);
     Status status = Ok;
-    Timer t;
+    auto t = TimeGet();
     textDraw->Lock();
     for (DrawInstr& i : *drawInstructions) {
         RectF bbox = i.bbox;
         bbox.X += offX;
         bbox.Y += offY;
         if (DrawInstrType::String == i.type || DrawInstrType::RtlString == i.type) {
-            size_t strLen = str::Utf8ToWcharBuf(i.str.s, i.str.len, buf, dimof(buf));
+            size_t strLen = strconv::Utf8ToWcharBuf(i.str.s, i.str.len, buf, dimof(buf));
             // soft hyphens should not be displayed
             strLen -= str::RemoveChars(buf, L"\xad");
             textDraw->Draw(buf, strLen, bbox, DrawInstrType::RtlString == i.type);
@@ -1353,8 +1354,8 @@ void DrawHtmlPage(Graphics* g, mui::ITextRender* textDraw, Vec<DrawInstr>* drawI
             break;
     }
     textDraw->Unlock();
-    double dur = t.Stop();
-    lf("DrawHtmlPage: textDraw %.2f ms", dur);
+    double dur = TimeSinceInMs(t);
+    // logf("DrawHtmlPage: textDraw %.2f ms\n", dur);
 
     for (DrawInstr& i : *drawInstructions) {
         RectF bbox = i.bbox;

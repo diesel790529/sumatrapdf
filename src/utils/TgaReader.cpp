@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -379,7 +379,7 @@ unsigned char* SerializeBitmap(HBITMAP hbmp, size_t* bmpBytesOut) {
     headerLE.bitDepth = 24;
     TgaFooter footerLE = {0, 0, TGA_FOOTER_SIGNATURE};
 
-    str::Str<char> tgaData;
+    str::Str tgaData;
     tgaData.Append((char*)&headerLE, sizeof(headerLE));
     for (int k = 0; k < h; k++) {
         const char* line = bmpData + k * stride;
@@ -389,7 +389,7 @@ unsigned char* SerializeBitmap(HBITMAP hbmp, size_t* bmpBytesOut) {
                 j++;
             }
             if (j > 1) {
-                tgaData.Append((char)(j - 1 + 128));
+                tgaData.AppendChar((char)(j - 1 + 128));
                 tgaData.Append(line + i * 3, 3);
             } else {
                 // determine the length of a run of different pixels
@@ -398,7 +398,7 @@ unsigned char* SerializeBitmap(HBITMAP hbmp, size_t* bmpBytesOut) {
                 }
                 if (i + j < w || j > 128)
                     j--;
-                tgaData.Append((char)(j - 1));
+                tgaData.AppendChar((char)(j - 1));
                 tgaData.Append(line + i * 3, j * 3);
             }
         }

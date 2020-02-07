@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -6,34 +6,34 @@
 #include "HtmlParserLookup.h"
 #include "HtmlPullParser.h"
 
-static void HtmlAddWithNesting(str::Str<char>* out, HtmlToken* tok, size_t nesting) {
+static void HtmlAddWithNesting(str::Str* out, HtmlToken* tok, size_t nesting) {
     CrashIf(!tok->IsStartTag() && !tok->IsEndTag() && !tok->IsEmptyElementEndTag());
     bool isInline = IsInlineTag(tok->tag);
     // add a newline before block start tags (unless there already is one)
     bool onNewLine = out->size() == 0 || out->Last() == '\n';
     if (!onNewLine && !isInline && !tok->IsEndTag()) {
-        out->Append('\n');
+        out->AppendChar('\n');
         onNewLine = true;
     }
     // indent the tag if it starts on a new line
     if (onNewLine) {
         for (size_t i = 0; i < nesting; i++)
-            out->Append('\t');
+            out->AppendChar('\t');
         if (tok->IsEndTag() && nesting > 0)
             out->Pop();
     }
     // output the tag and all its attributes
-    out->Append('<');
+    out->AppendChar('<');
     if (tok->IsEndTag())
-        out->Append('/');
+        out->AppendChar('/');
     // TODO: normalize whitespace between attributes?
     out->Append(tok->s, tok->sLen);
     if (tok->IsEmptyElementEndTag())
-        out->Append('/');
-    out->Append('>');
+        out->AppendChar('/');
+    out->AppendChar('>');
     // add a newline after block end tags
     if (!isInline && !tok->IsStartTag())
-        out->Append('\n');
+        out->AppendChar('\n');
 }
 
 static bool IsWsText(const char* s, size_t len) {
@@ -47,7 +47,7 @@ char* PrettyPrintHtml(const char* s, size_t len, size_t& lenOut) {
     if ((size_t)-1 == len)
         len = str::Len(s);
 
-    str::Str<char> res(len);
+    str::Str res(len);
     HtmlPullParser parser(s, len);
     Vec<HtmlTag> tagNesting;
     HtmlToken* t;

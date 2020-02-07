@@ -1,10 +1,12 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/WinDynCalls.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "uia/TextRange.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
@@ -419,7 +421,7 @@ HRESULT STDMETHODCALLTYPE SumatraUIAutomationTextRange::GetText(int maxLength, B
     selection.StartAt(startPage, startGlyph);
     selection.SelectUpTo(endPage, endGlyph);
 
-    AutoFreeW selected_text(selection.ExtractText(L"\r\n"));
+    AutoFreeWstr selected_text(selection.ExtractText(L"\r\n"));
     size_t selected_text_length = str::Len(selected_text);
 
     // -1 and [0, inf) are allowed

@@ -79,8 +79,9 @@ class WindowInfo;
 class NotificationWnd;
 class RenderCache;
 class TabInfo;
-class LabelWithCloseWnd;
+struct LabelWithCloseWnd;
 struct SessionData;
+struct DropDownCtrl;
 
 // all defined in SumatraPDF.cpp
 extern bool gDebugShowLinks;
@@ -112,7 +113,7 @@ bool MayCloseWindow(WindowInfo* win);
 void CloseWindow(WindowInfo* win, bool quitIfLast, bool forceClose = false);
 void SetSidebarVisibility(WindowInfo* win, bool tocVisible, bool favVisible);
 void RememberFavTreeExpansionState(WindowInfo* win);
-void LayoutTreeContainer(LabelWithCloseWnd* l, HWND hwndTree);
+void LayoutTreeContainer(LabelWithCloseWnd* l, DropDownCtrl*, HWND hwndTree);
 void AdvanceFocus(WindowInfo* win);
 bool WindowInfoStillValid(WindowInfo* win);
 void SetCurrentLanguageAndRefreshUI(const char* langCode);
@@ -133,16 +134,22 @@ WindowInfo* FindWindowInfoByController(Controller* ctrl);
 // LoadDocument carries a lot of state, this holds them in
 // one place
 struct LoadArgs {
-    explicit LoadArgs(const WCHAR* fileName, WindowInfo* win = nullptr)
-        : fileName(fileName), win(win), showWin(true), forceReuse(false), isNewWindow(false), placeWindow(true) {}
+    explicit LoadArgs(const WCHAR* fileName, WindowInfo* win) {
+        this->fileName = fileName;
+        this->win = win;
+    }
 
-    const WCHAR* fileName;
-    WindowInfo* win;
-    bool showWin;
-    bool forceReuse;
+    const WCHAR* fileName = nullptr;
+    WindowInfo* win = nullptr;
+    bool showWin = true;
+    bool forceReuse = false;
+    // over-writes placeWindow and other flags and forces no changing
+    // of window location after loading
+    bool noPlaceWindow = false;
+
     // for internal use
-    bool isNewWindow;
-    bool placeWindow;
+    bool isNewWindow = false;
+    bool placeWindow = true;
 };
 
 WindowInfo* LoadDocument(LoadArgs& args);

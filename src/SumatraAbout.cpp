@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -7,14 +7,22 @@
 #include "utils/FileUtil.h"
 #include "utils/WinUtil.h"
 
-#include "BaseEngine.h"
+#include "wingui/WinGui.h"
+#include "wingui/TreeModel.h"
+#include "wingui/Layout.h"
+#include "wingui/Window.h"
+#include "wingui/TooltipCtrl.h"
+
+#include "SumatraConfig.h"
+#include "EngineBase.h"
 #include "SettingsStructs.h"
 #include "FileHistory.h"
-#include "Colors.h"
+#include "AppColors.h"
 #include "GlobalPrefs.h"
 #include "ProgressUpdateUI.h"
 #include "Notifications.h"
 #include "SumatraPDF.h"
+#include "SumatraConfig.h"
 #include "WindowInfo.h"
 #include "resource.h"
 #include "FileThumbnails.h"
@@ -47,7 +55,7 @@
 #define VERSION_TXT_FONT_SIZE 12
 
 #define VERSION_TXT L"v" CURR_VERSION_STR
-#ifdef SVN_PRE_RELEASE_VER
+#ifdef PRE_RELEASE_VER
 #define VERSION_SUB_TXT L"Pre-release"
 #else
 #define VERSION_SUB_TXT L""
@@ -58,7 +66,7 @@
 #endif
 
 // TODO: replace this link with a better one where license information is nicely collected/linked
-#if defined(SVN_PRE_RELEASE_VER) || defined(DEBUG)
+#if defined(PRE_RELEASE_VER) || defined(DEBUG)
 #define URL_LICENSE L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/AUTHORS"
 #define URL_AUTHORS L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/AUTHORS"
 #define URL_TRANSLATORS L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/TRANSLATORS"
@@ -72,7 +80,7 @@
 
 static ATOM gAtomAbout;
 static HWND gHwndAbout;
-static HWND gHwndAboutTooltip = nullptr;
+static TooltipCtrl* gAboutTooltip = nullptr;
 static const WCHAR* gClickedURL = nullptr;
 
 struct AboutLayoutInfoEl {
@@ -98,7 +106,7 @@ static AboutLayoutInfoEl gAboutLayoutInfo[] = {
     {L"last change", L"git commit " GIT_COMMIT_ID_STR,
      L"https://github.com/sumatrapdfreader/sumatrapdf/commit/" GIT_COMMIT_ID_STR},
 #endif
-#ifdef SVN_PRE_RELEASE_VER
+#ifdef PRE_RELEASE_VER
     {L"a note", L"Pre-release version, for testing only!", nullptr},
 #endif
 #ifdef DEBUG
@@ -114,28 +122,30 @@ static Vec<StaticLinkInfo> gLinkInfo;
 #define COL4 RGB(69, 132, 190)
 #define COL5 RGB(112, 115, 207)
 
-static void DrawSumatraPDF(HDC hdc, PointI pt) {
-    const WCHAR* txt = APP_NAME_STR;
-#ifdef ABOUT_USE_LESS_COLORS
-    // simple black version
-    SetTextColor(hdc, ABOUT_BORDER_COL);
-    TextOut(hdc, pt.x, pt.y, txt, (int)str::Len(txt));
-#else
+static void DrawAppName(HDC hdc, PointI pt) {
+    const WCHAR* txt = getAppName();
+    if (gIsRaMicroBuild) {
+        // simple black-ish version
+        COLORREF col = RGB(0x43, 0x43, 0x43);
+        SetTextColor(hdc, col);
+        TextOutW(hdc, pt.x, pt.y, txt, (int)str::Len(txt));
+        return;
+    }
+
     // colorful version
     COLORREF cols[] = {COL1, COL2, COL3, COL4, COL5, COL5, COL4, COL3, COL2, COL1};
     for (size_t i = 0; i < str::Len(txt); i++) {
         SetTextColor(hdc, cols[i % dimof(cols)]);
-        TextOut(hdc, pt.x, pt.y, txt + i, 1);
+        TextOutW(hdc, pt.x, pt.y, txt + i, 1);
 
         SIZE txtSize;
         GetTextExtentPoint32(hdc, txt + i, 1, &txtSize);
         pt.x += txtSize.cx;
     }
-#endif
 }
 
-static WCHAR* GetSumatraVersion() {
-    str::Str<WCHAR> s;
+static WCHAR* GetAppVersion() {
+    str::WStr s;
     s.Set(VERSION_TXT);
     if (IsProcess64()) {
         s.Append(L" 64-bit");
@@ -147,24 +157,25 @@ static WCHAR* GetSumatraVersion() {
 }
 
 static SizeI CalcSumatraVersionSize(HWND hwnd, HDC hdc) {
-    SizeI result;
+    SizeI result{};
 
-    ScopedFont fontSumatraTxt(CreateSimpleFont(hdc, SUMATRA_TXT_FONT, SUMATRA_TXT_FONT_SIZE));
-    ScopedFont fontVersionTxt(CreateSimpleFont(hdc, VERSION_TXT_FONT, VERSION_TXT_FONT_SIZE));
-    ScopedHdcSelect selFont(hdc, fontSumatraTxt);
+    AutoDeleteFont fontSumatraTxt(CreateSimpleFont(hdc, SUMATRA_TXT_FONT, SUMATRA_TXT_FONT_SIZE));
+    AutoDeleteFont fontVersionTxt(CreateSimpleFont(hdc, VERSION_TXT_FONT, VERSION_TXT_FONT_SIZE));
+    ScopedSelectObject selFont(hdc, fontSumatraTxt);
 
-    SIZE txtSize;
+    SIZE txtSize{};
     /* calculate minimal top box size */
-    const WCHAR* txt = APP_NAME_STR;
+    const WCHAR* txt = getAppName();
+
     GetTextExtentPoint32(hdc, txt, (int)str::Len(txt), &txtSize);
-    result.dy = txtSize.cy + ABOUT_BOX_MARGIN_DY * 2;
+    result.dy = txtSize.cy + DpiScale(hwnd, ABOUT_BOX_MARGIN_DY * 2);
     result.dx = txtSize.cx;
 
     /* consider version and version-sub strings */
     SelectObject(hdc, fontVersionTxt);
-    AutoFreeW ver(GetSumatraVersion());
+    AutoFreeWstr ver = GetAppVersion();
     GetTextExtentPoint32(hdc, ver.Get(), (int)str::Len(ver.Get()), &txtSize);
-    LONG minWidth = txtSize.cx + DpiScaleX(hwnd, 8);
+    LONG minWidth = txtSize.cx + DpiScale(hwnd, 8);
     txt = VERSION_SUB_TXT;
     GetTextExtentPoint32(hdc, txt, (int)str::Len(txt), &txtSize);
     txtSize.cx = std::max(txtSize.cx, minWidth);
@@ -173,36 +184,36 @@ static SizeI CalcSumatraVersionSize(HWND hwnd, HDC hdc) {
     return result;
 }
 
-static void DrawSumatraVersion(HDC hdc, RectI rect) {
-    ScopedFont fontSumatraTxt(CreateSimpleFont(hdc, SUMATRA_TXT_FONT, SUMATRA_TXT_FONT_SIZE));
-    ScopedFont fontVersionTxt(CreateSimpleFont(hdc, VERSION_TXT_FONT, VERSION_TXT_FONT_SIZE));
+static void DrawSumatraVersion(HWND hwnd, HDC hdc, RectI rect) {
+    AutoDeleteFont fontSumatraTxt(CreateSimpleFont(hdc, SUMATRA_TXT_FONT, SUMATRA_TXT_FONT_SIZE));
+    AutoDeleteFont fontVersionTxt(CreateSimpleFont(hdc, VERSION_TXT_FONT, VERSION_TXT_FONT_SIZE));
     HGDIOBJ oldFont = SelectObject(hdc, fontSumatraTxt);
 
     SetBkMode(hdc, TRANSPARENT);
 
     SIZE txtSize;
-    const WCHAR* txt = APP_NAME_STR;
+    const WCHAR* txt = getAppName();
     GetTextExtentPoint32(hdc, txt, (int)str::Len(txt), &txtSize);
     RectI mainRect(rect.x + (rect.dx - txtSize.cx) / 2, rect.y + (rect.dy - txtSize.cy) / 2, txtSize.cx, txtSize.cy);
-    DrawSumatraPDF(hdc, mainRect.TL());
+    DrawAppName(hdc, mainRect.TL());
 
     SetTextColor(hdc, WIN_COL_BLACK);
     SelectObject(hdc, fontVersionTxt);
     PointI pt(mainRect.x + mainRect.dx + ABOUT_INNER_PADDING, mainRect.y);
 
-    AutoFreeW ver(GetSumatraVersion());
+    AutoFreeWstr ver = GetAppVersion();
     TextOut(hdc, pt.x, pt.y, ver.Get(), (int)str::Len(ver.Get()));
     txt = VERSION_SUB_TXT;
-    TextOut(hdc, pt.x, pt.y + 16, txt, (int)str::Len(txt));
+    TextOut(hdc, pt.x, pt.y + DpiScale(hwnd, 13), txt, (int)str::Len(txt));
 
     SelectObject(hdc, oldFont);
 }
 
 static RectI DrawBottomRightLink(HWND hwnd, HDC hdc, const WCHAR* txt) {
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 14));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 14));
     auto col = GetAppColor(AppColor::MainWindowLink);
-    ScopedPen penLinkLine(CreatePen(PS_SOLID, 1, col));
-    ScopedHdcSelect font(hdc, fontLeftTxt);
+    AutoDeletePen penLinkLine(CreatePen(PS_SOLID, 1, col));
+    ScopedSelectObject font(hdc, fontLeftTxt);
 
     SetTextColor(hdc, col);
     SetBkMode(hdc, TRANSPARENT);
@@ -217,7 +228,7 @@ static RectI DrawBottomRightLink(HWND hwnd, HDC hdc, const WCHAR* txt) {
     RECT rTmp = rect.ToRECT();
     DrawText(hdc, txt, -1, &rTmp, IsUIRightToLeft() ? DT_RTLREADING : DT_LEFT);
     {
-        ScopedHdcSelect pen(hdc, penLinkLine);
+        ScopedSelectObject pen(hdc, penLinkLine);
         PaintLine(hdc, RectI(rect.x, rect.y + rect.dy, rect.dx, 0));
     }
 
@@ -231,15 +242,15 @@ static RectI DrawBottomRightLink(HWND hwnd, HDC hdc, const WCHAR* txt) {
    to understand without seeing the design. */
 static void DrawAbout(HWND hwnd, HDC hdc, RectI rect, Vec<StaticLinkInfo>& linkInfo) {
     auto col = GetAppColor(AppColor::MainWindowText);
-    ScopedPen penBorder(CreatePen(PS_SOLID, ABOUT_LINE_OUTER_SIZE, col));
-    ScopedPen penDivideLine(CreatePen(PS_SOLID, ABOUT_LINE_SEP_SIZE, col));
+    AutoDeletePen penBorder(CreatePen(PS_SOLID, ABOUT_LINE_OUTER_SIZE, col));
+    AutoDeletePen penDivideLine(CreatePen(PS_SOLID, ABOUT_LINE_SEP_SIZE, col));
     col = GetAppColor(AppColor::MainWindowLink);
-    ScopedPen penLinkLine(CreatePen(PS_SOLID, ABOUT_LINE_SEP_SIZE, col));
+    AutoDeletePen penLinkLine(CreatePen(PS_SOLID, ABOUT_LINE_SEP_SIZE, col));
 
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
-    ScopedFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
+    AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
 
-    ScopedHdcSelect font(hdc, fontLeftTxt); /* Just to remember the orig font */
+    ScopedSelectObject font(hdc, fontLeftTxt); /* Just to remember the orig font */
 
     ClientRect rc(hwnd);
     RECT rTmp = rc.ToRECT();
@@ -250,9 +261,9 @@ static void DrawAbout(HWND hwnd, HDC hdc, RectI rect, Vec<StaticLinkInfo>& linkI
     /* render title */
     RectI titleRect(rect.TL(), CalcSumatraVersionSize(hwnd, hdc));
 
-    ScopedBrush bgBrush(CreateSolidBrush(col));
-    ScopedHdcSelect brush(hdc, bgBrush);
-    ScopedHdcSelect pen(hdc, penBorder);
+    AutoDeleteBrush bgBrush(CreateSolidBrush(col));
+    ScopedSelectObject brush(hdc, bgBrush);
+    ScopedSelectObject pen(hdc, penBorder);
 #ifndef ABOUT_USE_LESS_COLORS
     Rectangle(hdc, rect.x, rect.y + ABOUT_LINE_OUTER_SIZE, rect.x + rect.dx,
               rect.y + titleRect.dy + ABOUT_LINE_OUTER_SIZE);
@@ -265,7 +276,7 @@ static void DrawAbout(HWND hwnd, HDC hdc, RectI rect, Vec<StaticLinkInfo>& linkI
 #endif
 
     titleRect.Offset((rect.dx - titleRect.dx) / 2, 0);
-    DrawSumatraVersion(hdc, titleRect);
+    DrawSumatraVersion(hwnd, hdc, titleRect);
 
     /* render attribution box */
     col = GetAppColor(AppColor::MainWindowText);
@@ -315,8 +326,8 @@ static void DrawAbout(HWND hwnd, HDC hdc, RectI rect, Vec<StaticLinkInfo>& linkI
 }
 
 static void UpdateAboutLayoutInfo(HWND hwnd, HDC hdc, RectI* rect) {
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
-    ScopedFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
+    AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
 
     HGDIOBJ origFont = SelectObject(hdc, fontLeftTxt);
 
@@ -410,9 +421,9 @@ static void OnPaintAbout(HWND hwnd) {
 
 static void CopyAboutInfoToClipboard(HWND hwnd) {
     UNUSED(hwnd);
-    str::Str<WCHAR> info(512);
-    AutoFreeW ver(GetSumatraVersion());
-    info.AppendFmt(L"%s %s\r\n", APP_NAME_STR, ver.Get());
+    str::WStr info(512);
+    AutoFreeWstr ver = GetAppVersion();
+    info.AppendFmt(L"%s %s\r\n", getAppName(), ver.Get());
     for (size_t i = info.size() - 2; i > 0; i--) {
         info.Append('-');
     }
@@ -424,22 +435,25 @@ static void CopyAboutInfoToClipboard(HWND hwnd) {
         maxLen = std::max(maxLen, str::Len(el->leftTxt));
     }
     for (AboutLayoutInfoEl* el = gAboutLayoutInfo; el->leftTxt; el++) {
-        for (size_t i = maxLen - str::Len(el->leftTxt); i > 0; i--)
+        for (size_t i = maxLen - str::Len(el->leftTxt); i > 0; i--) {
             info.Append(' ');
+        }
         info.AppendFmt(L"%s: %s\r\n", el->leftTxt, el->url ? el->url : el->rightTxt);
     }
     CopyTextToClipboard(info.LendData());
 }
 
 const WCHAR* GetStaticLink(Vec<StaticLinkInfo>& linkInfo, int x, int y, StaticLinkInfo* info) {
-    if (!HasPermission(Perm_DiskAccess))
+    if (!HasPermission(Perm_DiskAccess)) {
         return nullptr;
+    }
 
     PointI pt(x, y);
     for (size_t i = 0; i < linkInfo.size(); i++) {
         if (linkInfo.at(i).rect.Contains(pt)) {
-            if (info)
+            if (info) {
                 *info = linkInfo.at(i);
+            }
             return linkInfo.at(i).target;
         }
     }
@@ -448,34 +462,22 @@ const WCHAR* GetStaticLink(Vec<StaticLinkInfo>& linkInfo, int x, int y, StaticLi
 }
 
 static void CreateInfotipForLink(StaticLinkInfo& linkInfo) {
-    if (gHwndAboutTooltip)
+    if (gAboutTooltip != nullptr) {
         return;
+    }
 
-    gHwndAboutTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
-                                       CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, gHwndAbout, nullptr,
-                                       GetModuleHandle(nullptr), nullptr);
-
-    TOOLINFO ti = {0};
-    ti.cbSize = sizeof(ti);
-    ti.hwnd = gHwndAbout;
-    ti.uFlags = TTF_SUBCLASS;
-    ti.lpszText = (WCHAR*)linkInfo.infotip;
-    ti.rect = linkInfo.rect.ToRECT();
-
-    SendMessage(gHwndAboutTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+    gAboutTooltip = new TooltipCtrl(gHwndAbout);
+    gAboutTooltip->Create();
+    gAboutTooltip->Show(linkInfo.infotip, linkInfo.rect, false);
 }
 
-static void ClearInfotip() {
-    if (!gHwndAboutTooltip)
+static void DeleteInfotip() {
+    if (gAboutTooltip == nullptr) {
         return;
-
-    TOOLINFO ti = {0};
-    ti.cbSize = sizeof(ti);
-    ti.hwnd = gHwndAbout;
-
-    SendMessage(gHwndAboutTooltip, TTM_DELTOOL, 0, (LPARAM)&ti);
-    DestroyWindow(gHwndAboutTooltip);
-    gHwndAboutTooltip = nullptr;
+    }
+    // gAboutTooltip->Hide();
+    delete gAboutTooltip;
+    gAboutTooltip = nullptr;
 }
 
 LRESULT CALLBACK WndProcAbout(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -504,7 +506,7 @@ LRESULT CALLBACK WndProcAbout(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
                     return TRUE;
                 }
             }
-            ClearInfotip();
+            DeleteInfotip();
             return DefWindowProc(hwnd, message, wParam, lParam);
 
         case WM_LBUTTONDOWN:
@@ -528,7 +530,7 @@ LRESULT CALLBACK WndProcAbout(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             break;
 
         case WM_DESTROY:
-            ClearInfotip();
+            DeleteInfotip();
             AssertCrash(gHwndAbout);
             gHwndAbout = nullptr;
             break;
@@ -548,7 +550,8 @@ void OnMenuAbout() {
     if (!gAtomAbout) {
         WNDCLASSEX wcex;
         FillWndClassEx(wcex, ABOUT_CLASS_NAME, WndProcAbout);
-        wcex.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_SUMATRAPDF));
+        HMODULE h = GetModuleHandleW(nullptr);
+        wcex.hIcon = LoadIcon(h, MAKEINTRESOURCE(getAppIconID()));
         gAtomAbout = RegisterClassEx(&wcex);
         CrashIf(!gAtomAbout);
     }
@@ -594,42 +597,42 @@ void DrawAboutPage(WindowInfo* win, HDC hdc) {
 
 #define DOCLIST_SEPARATOR_DY 2
 #define DOCLIST_THUMBNAIL_BORDER_W 1
-#define DOCLIST_MARGIN_LEFT DpiScaleX(win->hwndFrame, 40)
-#define DOCLIST_MARGIN_BETWEEN_X DpiScaleX(win->hwndFrame, 30)
-#define DOCLIST_MARGIN_RIGHT DpiScaleX(win->hwndFrame, 40)
-#define DOCLIST_MARGIN_TOP DpiScaleY(win->hwndFrame, 60)
-#define DOCLIST_MARGIN_BETWEEN_Y DpiScaleY(win->hwndFrame, 50)
-#define DOCLIST_MARGIN_BOTTOM DpiScaleY(win->hwndFrame, 40)
+#define DOCLIST_MARGIN_LEFT DpiScale(win->hwndFrame, 40)
+#define DOCLIST_MARGIN_BETWEEN_X DpiScale(win->hwndFrame, 30)
+#define DOCLIST_MARGIN_RIGHT DpiScale(win->hwndFrame, 40)
+#define DOCLIST_MARGIN_TOP DpiScale(win->hwndFrame, 60)
+#define DOCLIST_MARGIN_BETWEEN_Y DpiScale(win->hwndFrame, 50)
+#define DOCLIST_MARGIN_BOTTOM DpiScale(win->hwndFrame, 40)
 #define DOCLIST_MAX_THUMBNAILS_X 5
-#define DOCLIST_BOTTOM_BOX_DY DpiScaleY(win->hwndFrame, 50)
+#define DOCLIST_BOTTOM_BOX_DY DpiScale(win->hwndFrame, 50)
 
 void DrawStartPage(WindowInfo* win, HDC hdc, FileHistory& fileHistory, COLORREF textColor, COLORREF backgroundColor) {
     auto col = GetAppColor(AppColor::MainWindowText);
-    ScopedPen penBorder(CreatePen(PS_SOLID, DOCLIST_SEPARATOR_DY, col));
-    ScopedPen penThumbBorder(CreatePen(PS_SOLID, DOCLIST_THUMBNAIL_BORDER_W, col));
+    AutoDeletePen penBorder(CreatePen(PS_SOLID, DOCLIST_SEPARATOR_DY, col));
+    AutoDeletePen penThumbBorder(CreatePen(PS_SOLID, DOCLIST_THUMBNAIL_BORDER_W, col));
     col = GetAppColor(AppColor::MainWindowLink);
-    ScopedPen penLinkLine(CreatePen(PS_SOLID, 1, col));
+    AutoDeletePen penLinkLine(CreatePen(PS_SOLID, 1, col));
 
-    ScopedFont fontSumatraTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 24));
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 14));
+    AutoDeleteFont fontSumatraTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 24));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, L"MS Shell Dlg", 14));
 
-    ScopedHdcSelect font(hdc, fontSumatraTxt);
+    ScopedSelectObject font(hdc, fontSumatraTxt);
 
     ClientRect rc(win->hwndCanvas);
     RECT rTmp = rc.ToRECT();
     col = GetAppColor(AppColor::MainWindowBg);
-    ScopedBrush brushLogoBg(CreateSolidBrush(col));
+    AutoDeleteBrush brushLogoBg(CreateSolidBrush(col));
     FillRect(hdc, &rTmp, brushLogoBg);
 
-    ScopedHdcSelect brush(hdc, brushLogoBg);
-    ScopedHdcSelect pen(hdc, penBorder);
+    ScopedSelectObject brush(hdc, brushLogoBg);
+    ScopedSelectObject pen(hdc, penBorder);
 
     bool isRtl = IsUIRightToLeft();
 
     /* render title */
     RectI titleBox = RectI(PointI(0, 0), CalcSumatraVersionSize(win->hwndCanvas, hdc));
     titleBox.x = rc.dx - titleBox.dx - 3;
-    DrawSumatraVersion(hdc, titleBox);
+    DrawSumatraVersion(win->hwndCanvas, hdc, titleBox);
     PaintLine(hdc, RectI(0, titleBox.dy, rc.dx, 0));
 
     /* render recent files list */
@@ -716,19 +719,23 @@ void DrawStartPage(WindowInfo* win, HDC hdc, FileHistory& fileHistory, COLORREF 
             }
             RoundRect(hdc, page.x, page.y, page.x + page.dx, page.y + page.dy, 10, 10);
 
-            int iconSpace = DpiScaleX(win->hwndFrame, 20);
+            int iconSpace = DpiScale(win->hwndFrame, 20);
             RectI rect(page.x + iconSpace, page.y + page.dy + 3, page.dx - iconSpace, iconSpace);
             if (isRtl)
                 rect.x -= iconSpace;
             rTmp = rect.ToRECT();
-            DrawText(hdc, path::GetBaseName(state->filePath), -1, &rTmp,
+            DrawText(hdc, path::GetBaseNameNoFree(state->filePath), -1, &rTmp,
                      DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | (isRtl ? DT_RIGHT : DT_LEFT));
 
+            // this crashes asan build in windows code
+            // see https://codeeval.dev/gist/bc761bb1ef1cce04e6a1d65e9d30201b
+#if !defined(ASAN_BUILD)
             SHFILEINFO sfi = {0};
             HIMAGELIST himl = (HIMAGELIST)SHGetFileInfo(state->filePath, 0, &sfi, sizeof(sfi),
                                                         SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
-            ImageList_Draw(himl, sfi.iIcon, hdc, isRtl ? page.x + page.dx - DpiScaleX(win->hwndFrame, 16) : page.x,
+            ImageList_Draw(himl, sfi.iIcon, hdc, isRtl ? page.x + page.dx - DpiScale(win->hwndFrame, 16) : page.x,
                            rect.y, ILD_TRANSPARENT);
+#endif
 
             win->staticLinks.Append(StaticLinkInfo(rect.Union(page), state->filePath, state->filePath));
         }

@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -56,8 +56,9 @@ public:
     IFACEMETHODIMP CreateInstance(IUnknown *punkOuter, REFIID riid, void **ppv)
     {
         *ppv = nullptr;
-        if (punkOuter)
+        if (punkOuter) {
             return CLASS_E_NOAGGREGATION;
+        }
 
         ScopedComPtr<IFilter> pFilter;
 
@@ -118,8 +119,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 {
     *ppv = nullptr;
     ScopedComPtr<CClassFactory> pClassFactory(new CClassFactory(rclsid));
-    if (!pClassFactory)
+    if (!pClassFactory) {
         return E_OUTOFMEMORY;
+    }
     return pClassFactory->QueryInterface(riid, ppv);
 }
 
@@ -127,7 +129,7 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 
 STDAPI DllRegisterServer()
 {
-    AutoFreeW dllPath(path::GetPathOfFileInAppDir());
+    AutoFreeWstr dllPath(path::GetPathOfFileInAppDir());
     if (!dllPath)
         return HRESULT_FROM_WIN32(GetLastError());
 
@@ -172,7 +174,7 @@ STDAPI DllRegisterServer()
         { L"Software\\Classes\\CLSID\\" SZ_EPUB_FILTER_CLSID L"\\InProcServer32",
                 L"ThreadingModel",      L"Both" },
         { L"Software\\Classes\\CLSID\\" SZ_EPUB_FILTER_HANDLER,
-                nullptr,                   L"SumatraPDF LaTeX IFilter Persistent Handler" },
+                nullptr,                   L"SumatraPDF EPUB IFilter Persistent Handler" },
         { L"Software\\Classes\\CLSID\\" SZ_EPUB_FILTER_HANDLER L"\\PersistentAddinsRegistered",
                 nullptr,                   L"" },
         { L"Software\\Classes\\CLSID\\" SZ_EPUB_FILTER_HANDLER L"\\PersistentAddinsRegistered\\{89BCB740-6119-101A-BCB7-00DD010655AF}",
@@ -185,8 +187,9 @@ STDAPI DllRegisterServer()
     for (int i = 0; i < dimof(regVals); i++) {
         WriteRegStr(HKEY_LOCAL_MACHINE, regVals[i].key, regVals[i].value, regVals[i].data);
         bool ok = WriteRegStr(HKEY_CURRENT_USER, regVals[i].key, regVals[i].value, regVals[i].data);
-        if (!ok)
+        if (!ok) {
             return E_FAIL;
+        }
     }
 
     return S_OK;
@@ -215,8 +218,9 @@ STDAPI DllUnregisterServer()
     for (int i = 0; i < dimof(regKeys); i++) {
         DeleteRegKey(HKEY_LOCAL_MACHINE, regKeys[i]);
         bool ok = DeleteRegKey(HKEY_CURRENT_USER, regKeys[i]);
-        if (!ok)
+        if (!ok) {
             hr = E_FAIL;
+        }
     }
 
     return hr;

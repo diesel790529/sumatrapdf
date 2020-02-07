@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 class NotificationWnd;
@@ -49,16 +49,20 @@ class NotificationWnd : public ProgressUpdateUI {
 };
 
 class Notifications {
-    std::vector<NotificationWnd*> wnds;
+    Vec<NotificationWnd*> wnds;
 
     int GetWndX(NotificationWnd* wnd);
     void MoveBelow(NotificationWnd* fix, NotificationWnd* move);
     void Remove(NotificationWnd* wnd);
 
   public:
-    ~Notifications() { DeleteVecMembers(wnds); }
+    ~Notifications() {
+        DeleteVecMembers(wnds);
+    }
 
-    bool Contains(NotificationWnd* wnd) const { return vectorContains(this->wnds, wnd); }
+    bool Contains(NotificationWnd* wnd) const {
+        return wnds.Contains(wnd);
+    }
 
     // groupId is used to classify notifications and causes a notification
     // to replace any other notification of the same group

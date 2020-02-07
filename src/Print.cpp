@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -6,15 +6,17 @@
 #include "utils/FileUtil.h"
 #include "utils/UITask.h"
 #include "utils/WinUtil.h"
+#include "utils/Log.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 
 #include "SettingsStructs.h"
 #include "Controller.h"
+#include "GlobalPrefs.h"
 #include "ChmModel.h"
 #include "DisplayModel.h"
-#include "GlobalPrefs.h"
 #include "ProgressUpdateUI.h"
 #include "TextSelection.h"
 #include "TextSearch.h"
@@ -30,15 +32,15 @@
 #include "Translations.h"
 
 struct PrintData {
-    AutoFreeW printerName;
-    ScopedMem<DEVMODE> devMode;
-    BaseEngine* engine = nullptr;
+    AutoFreeWstr printerName;
+    ScopedMem<DEVMODEW> devMode;
+    EngineBase* engine = nullptr;
     Vec<PRINTPAGERANGE> ranges; // empty when printing a selection
     Vec<SelectionOnPage> sel;   // empty when printing a page range
     Print_Advanced_Data advData;
     int rotation = 0;
 
-    PrintData(BaseEngine* engine, PRINTER_INFO_2* printerInfo, DEVMODE* devMode, Vec<PRINTPAGERANGE>& ranges,
+    PrintData(EngineBase* engine, PRINTER_INFO_2* printerInfo, DEVMODEW* devMode, Vec<PRINTPAGERANGE>& ranges,
               Print_Advanced_Data& advData, int rotation = 0, Vec<SelectionOnPage>* sel = nullptr) {
         this->advData = advData;
         this->rotation = rotation;
@@ -60,7 +62,9 @@ struct PrintData {
         }
     }
 
-    ~PrintData() { delete engine; }
+    ~PrintData() {
+        delete engine;
+    }
 };
 
 class AbortCookieManager {
@@ -69,7 +73,9 @@ class AbortCookieManager {
   public:
     AbortCookie* cookie = nullptr;
 
-    AbortCookieManager() { InitializeCriticalSection(&cookieAccess); }
+    AbortCookieManager() {
+        InitializeCriticalSection(&cookieAccess);
+    }
     ~AbortCookieManager() {
         Clear();
         DeleteCriticalSection(&cookieAccess);
@@ -113,15 +119,15 @@ static bool PrintToDevice(const PrintData& pd, ProgressUpdateUI* progressUI = nu
         return false;
     }
 
-    BaseEngine& engine = *pd.engine;
-    AutoFreeW fileName;
+    EngineBase& engine = *pd.engine;
+    AutoFreeWstr fileName;
 
     DOCINFO di = {0};
     di.cbSize = sizeof(DOCINFO);
     if (gPluginMode) {
         fileName.Set(url::GetFileName(gPluginURL));
         // fall back to a generic "filename" instead of the more confusing temporary filename
-        di.lpszDocName = fileName ? fileName : L"filename";
+        di.lpszDocName = fileName ? fileName.get() : L"filename";
     } else {
         di.lpszDocName = engine.FileName();
     }
@@ -152,7 +158,7 @@ static bool PrintToDevice(const PrintData& pd, ProgressUpdateUI* progressUI = nu
     }
 
     // cf. http://blogs.msdn.com/b/oldnewthing/archive/2012/11/09/10367057.aspx
-    ScopedHDC hdc(CreateDC(nullptr, pd.printerName, nullptr, pd.devMode));
+    AutoDeleteDC hdc(CreateDC(nullptr, pd.printerName, nullptr, pd.devMode));
     if (!hdc) {
         return false;
     }
@@ -168,8 +174,10 @@ static bool PrintToDevice(const PrintData& pd, ProgressUpdateUI* progressUI = nu
     const SizeI paperSize(GetDeviceCaps(hdc, PHYSICALWIDTH), GetDeviceCaps(hdc, PHYSICALHEIGHT));
     const RectI printable(GetDeviceCaps(hdc, PHYSICALOFFSETX), GetDeviceCaps(hdc, PHYSICALOFFSETY),
                           GetDeviceCaps(hdc, HORZRES), GetDeviceCaps(hdc, VERTRES));
-    const float dpiFactor = std::min(GetDeviceCaps(hdc, LOGPIXELSX) / engine.GetFileDPI(),
-                                     GetDeviceCaps(hdc, LOGPIXELSY) / engine.GetFileDPI());
+    float fileDPI = engine.GetFileDPI();
+    float px = (float)GetDeviceCaps(hdc, LOGPIXELSX);
+    float py = (float)GetDeviceCaps(hdc, LOGPIXELSY);
+    float dpiFactor = std::min(px / fileDPI, py / fileDPI);
     bool bPrintPortrait = paperSize.dx < paperSize.dy;
     if (pd.devMode && (pd.devMode.Get()->dmFields & DM_ORIENTATION))
         bPrintPortrait = DMORIENT_PORTRAIT == pd.devMode.Get()->dmOrientation;
@@ -218,9 +226,12 @@ static bool PrintToDevice(const PrintData& pd, ProgressUpdateUI* progressUI = nu
                 bool ok = false;
                 short shrink = 1;
                 do {
-                    RenderedBitmap* bmp =
-                        engine.RenderBitmap(pd.sel.at(i).pageNo, zoom / shrink, pd.rotation, clipRegion,
-                                            RenderTarget::Print, abortCookie ? &abortCookie->cookie : nullptr);
+                    RenderPageArgs args(pd.sel.at(i).pageNo, zoom / shrink, pd.rotation, clipRegion,
+                                        RenderTarget::Print);
+                    if (abortCookie) {
+                        args.cookie_out = &abortCookie->cookie;
+                    }
+                    RenderedBitmap* bmp = engine.RenderPage(args);
                     if (abortCookie) {
                         abortCookie->Clear();
                     }
@@ -318,13 +329,17 @@ static bool PrintToDevice(const PrintData& pd, ProgressUpdateUI* progressUI = nu
             bool ok = false;
             short shrink = 1;
             do {
-                RenderedBitmap* bmp = engine.RenderBitmap(pageNo, zoom / shrink, rotation, nullptr, RenderTarget::Print,
-                                                          abortCookie ? &abortCookie->cookie : nullptr);
+                RenderPageArgs args(pageNo, zoom / shrink, rotation, nullptr, RenderTarget::Print);
+                if (abortCookie) {
+                    args.cookie_out = &abortCookie->cookie;
+                }
+                RenderedBitmap* bmp = engine.RenderPage(args);
                 if (abortCookie) {
                     abortCookie->Clear();
                 }
                 if (bmp && bmp->GetBitmap()) {
-                    RectI rc(offset.x, offset.y, bmp->Size().dx * shrink, bmp->Size().dy * shrink);
+                    auto size = bmp->Size();
+                    RectI rc(offset.x, offset.y, size.dx * shrink, size.dy * shrink);
                     ok = bmp->StretchDIBits(hdc, rc);
                 }
                 delete bmp;
@@ -390,7 +405,9 @@ class PrintThreadData : public ProgressUpdateUI {
         });
     }
 
-    virtual bool WasCanceled() { return isCanceled || !WindowInfoStillValid(win) || win->printCanceled; }
+    virtual bool WasCanceled() {
+        return isCanceled || !WindowInfoStillValid(win) || win->printCanceled;
+    }
 
     static DWORD WINAPI PrintThread(LPVOID data) {
         PrintThreadData* threadData = (PrintThreadData*)data;
@@ -498,7 +515,7 @@ void OnMenuPrint(WindowInfo* win, bool waitForCompletion) {
         return;
     }
     if (win->AsEbook()) {
-        // TODO: use EbookEngine for printing?
+        // TODO: use EngineEbook for printing?
         return;
     }
 
@@ -650,7 +667,7 @@ Exit:
     GlobalFree(pd.hDevMode);
 }
 
-static short GetPaperSize(BaseEngine* engine) {
+static short GetPaperSize(EngineBase* engine) {
     RectD mediabox = engine->PageMediabox(1);
     SizeD size = engine->Transform(mediabox, 1, 1.0f / engine->GetFileDPI(), 0).Size();
 
@@ -721,7 +738,7 @@ static short GetPaperSourceByName(const WCHAR* printerName, const WCHAR* binName
     }
     // try to determine the paper bin number by name
     ScopedMem<WORD> bins(AllocArray<WORD>(count));
-    AutoFreeW binNames(AllocArray<WCHAR>(24 * count + 1));
+    AutoFreeWstr binNames(AllocArray<WCHAR>(24 * count + 1));
     DeviceCapabilitiesW(printerName, nullptr, DC_BINS, (WCHAR*)bins.Get(), nullptr);
     DeviceCapabilitiesW(printerName, nullptr, DC_BINNAMES, binNames.Get(), nullptr);
     for (DWORD i = 0; i < count; i++) {
@@ -801,7 +818,7 @@ static void ApplyPrintSettings(const WCHAR* printerName, const WCHAR* settings, 
     }
 }
 
-bool PrintFile(BaseEngine* engine, WCHAR* printerName, bool displayErrors, const WCHAR* settings) {
+bool PrintFile(EngineBase* engine, WCHAR* printerName, bool displayErrors, const WCHAR* settings) {
     bool ok = false;
     if (!HasPermission(Perm_PrinterAccess)) {
         return false;
@@ -812,6 +829,7 @@ bool PrintFile(BaseEngine* engine, WCHAR* printerName, bool displayErrors, const
         engine = nullptr;
     }
 #endif
+
     if (!engine) {
         if (displayErrors) {
             MessageBoxWarning(nullptr, _TR("Cannot print this file"), _TR("Printing problem."));
@@ -819,14 +837,14 @@ bool PrintFile(BaseEngine* engine, WCHAR* printerName, bool displayErrors, const
         return false;
     }
 
-    AutoFreeW defaultPrinter;
+    AutoFreeWstr defaultPrinter;
     if (!printerName) {
         defaultPrinter.Set(GetDefaultPrinterName());
         printerName = defaultPrinter;
     }
 
     HANDLE printer;
-    BOOL res = OpenPrinter(printerName, &printer, nullptr);
+    BOOL res = OpenPrinterW(printerName, &printer, nullptr);
     if (!res) {
         if (displayErrors) {
             MessageBoxWarning(nullptr, _TR("Printer with given name doesn't exist"), _TR("Printing problem."));
@@ -834,38 +852,32 @@ bool PrintFile(BaseEngine* engine, WCHAR* printerName, bool displayErrors, const
         return false;
     }
 
-    LONG returnCode = 0;
     LONG structSize = 0;
     LPDEVMODE devMode = nullptr;
-    // get printer driver information
+
     DWORD needed = 0;
-    GetPrinter(printer, 2, nullptr, 0, &needed);
+    GetPrinterW(printer, 2, nullptr, 0, &needed);
     ScopedMem<PRINTER_INFO_2> infoData((PRINTER_INFO_2*)AllocArray<BYTE>(needed));
     if (infoData) {
-        res = GetPrinter(printer, 2, (LPBYTE)infoData.Get(), needed, &needed);
+        res = GetPrinterW(printer, 2, (LPBYTE)infoData.Get(), needed, &needed);
     }
     if (!res || !infoData || needed <= sizeof(PRINTER_INFO_2)) {
         goto Exit;
     }
 
-    structSize = DocumentProperties(nullptr, printer, printerName, nullptr, /* Asking for size, so */
-                                    nullptr,                                /* not used. */
-                                    0);                                     /* Zero returns buffer size. */
-    if (structSize < sizeof(DEVMODE)) {
-        // If failure, inform the user, cleanup and return failure.
+    /* ask for the size of DEVMODE struct */
+    structSize = DocumentPropertiesW(nullptr, printer, printerName, nullptr, nullptr, 0);
+    if (structSize < sizeof(DEVMODEW)) {
         if (displayErrors) {
             MessageBoxWarning(nullptr, _TR("Could not obtain Printer properties"), _TR("Printing problem."));
         }
         goto Exit;
     }
-    devMode = AllocStruct<DEVMODE>();
+    devMode = (DEVMODEW*)Allocator::AllocZero(nullptr, structSize);
 
     // Get the default DevMode for the printer and modify it for your needs.
-    returnCode = DocumentProperties(nullptr, printer, printerName, devMode, /* The address of the buffer to fill. */
-                                    nullptr,                                /* Not using the input buffer. */
-                                    DM_OUT_BUFFER);                         /* Have the output buffer filled. */
-    if (IDOK != returnCode) {
-        // If failure, inform the user, cleanup and return failure.
+    LONG ret = DocumentPropertiesW(nullptr, printer, printerName, devMode, nullptr, DM_OUT_BUFFER);
+    if (IDOK != ret) {
         if (displayErrors) {
             MessageBoxWarning(nullptr, _TR("Could not obtain Printer properties"), _TR("Printing problem."));
         }
@@ -901,9 +913,19 @@ Exit:
 }
 
 bool PrintFile(const WCHAR* fileName, WCHAR* printerName, bool displayErrors, const WCHAR* settings) {
-    AutoFreeW fileName2(path::Normalize(fileName));
-    BaseEngine* engine = EngineManager::CreateEngine(fileName2);
+    logf(L"PrintFile: file: '%s', printer: '%s'\n", fileName, printerName);
+    WCHAR* fileName2 = path::Normalize(fileName);
+    EngineBase* engine = EngineManager::CreateEngine(fileName2);
+    if (!engine) {
+        if (displayErrors) {
+            WCHAR* msg = str::Format(L"Couldn't open file '%s' for printing", fileName);
+            MessageBoxWarning(nullptr, msg, L"Error");
+            free(msg);
+        }
+        return false;
+    }
     bool ok = PrintFile(engine, printerName, displayErrors, settings);
     delete engine;
+    free(fileName2);
     return ok;
 }

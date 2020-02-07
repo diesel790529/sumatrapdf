@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -60,7 +60,7 @@ static WCHAR IntToChar(int codepoint) {
 
 // caller needs to free() the result
 WCHAR* DecodeHtmlEntitites(const char* string, UINT codepage) {
-    WCHAR* fixed = str::conv::FromCodePage(string, codepage);
+    WCHAR* fixed = strconv::FromCodePage(string, codepage);
     WCHAR* dst = fixed;
     const WCHAR* src = fixed;
 
@@ -112,7 +112,8 @@ HtmlParser::HtmlParser()
       attributesCount(0),
       codepage(CP_ACP),
       error(ErrParsingNoError),
-      errorContext(nullptr) {}
+      errorContext(nullptr) {
+}
 
 HtmlParser::~HtmlParser() {
     if (freeHtml)

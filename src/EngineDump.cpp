@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -10,25 +10,42 @@
 #include "utils/TgaReader.h"
 #include "utils/WinUtil.h"
 
-#include "BaseEngine.h"
-#include "DjVuEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
+#include "EngineDjVu.h"
 #include "EngineManager.h"
 #include "FileModifications.h"
 #include "PdfCreator.h"
 
 #define Out(msg, ...) printf(msg, __VA_ARGS__)
 
-static OwnedData Escape(WCHAR* string) {
-    AutoFreeW freeOnReturn(string);
+static bool NeedsEscape(const WCHAR* s) {
+    if (str::FindChar(s, '<')) {
+        return true;
+    }
+    if (str::FindChar(s, '&')) {
+        return true;
+    }
+    if (str::FindChar(s, '"')) {
+        return true;
+    }
+    return false;
+}
 
-    if (str::IsEmpty(string))
+// TODO: we leak because in the past Escape() was freeing str
+// and now we don't but I didn't update all the code
+// doesn't matter because engine dump does its job and quits
+static std::string_view Escape(const WCHAR* str) {
+    if (str::IsEmpty(str)) {
         return {};
+    }
 
-    if (!str::FindChar(string, '<') && !str::FindChar(string, '&') && !str::FindChar(string, '"'))
-        return str::conv::ToUtf8(string);
+    if (!NeedsEscape(str)) {
+        return strconv::WstrToUtf8(str);
+    }
 
-    str::Str<WCHAR> escaped(256);
-    for (const WCHAR* s = string; *s; s++) {
+    str::WStr escaped(256);
+    for (const WCHAR* s = str; *s; s++) {
         switch (*s) {
             case '&':
                 escaped.Append(L"&amp;");
@@ -50,78 +67,95 @@ static OwnedData Escape(WCHAR* string) {
                 break;
         }
     }
-    return str::conv::ToUtf8(escaped.Get());
+    return strconv::WstrToUtf8(escaped.Get());
 }
 
-void DumpProperties(BaseEngine* engine, bool fullDump) {
+void DumpProperties(EngineBase* engine, bool fullDump) {
     Out("\t<Properties\n");
-    OwnedData str = Escape(str::Dup(engine->FileName()));
+    AutoFree str = Escape(engine->FileName());
     Out("\t\tFilePath=\"%s\"\n", str.Get());
     str = Escape(engine->GetProperty(DocumentProperty::Title));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tTitle=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::Subject));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tSubject=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::Author));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tAuthor=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::Copyright));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tCopyright=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::CreationDate));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tCreationDate=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::ModificationDate));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tModDate=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::CreatorApp));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tCreator=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::PdfProducer));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tPdfProducer=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::PdfVersion));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tPdfVersion=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::PdfFileStructure));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tPdfFileStructure=\"%s\"\n", str.Get());
+    }
     str = Escape(engine->GetProperty(DocumentProperty::UnsupportedFeatures));
-    if (str.Get())
+    if (str.Get()) {
         Out("\t\tUnsupportedFeatures=\"%s\"\n", str.Get());
-    if (!engine->AllowsPrinting())
+    }
+    if (!engine->AllowsPrinting()) {
         Out("\t\tPrintingAllowed=\"no\"\n");
-    if (!engine->AllowsCopyingText())
+    }
+    if (!engine->AllowsCopyingText()) {
         Out("\t\tCopyingTextAllowed=\"no\"\n");
-    if (engine->IsImageCollection())
+    }
+    if (engine->IsImageCollection()) {
         Out("\t\tImageFileDPI=\"%g\"\n", engine->GetFileDPI());
-    if (engine->PreferredLayout())
-        Out("\t\tPreferredLayout=\"%d\"\n", engine->PreferredLayout());
+    }
+    if (engine->preferredLayout) {
+        Out("\t\tPreferredLayout=\"%d\"\n", engine->preferredLayout);
+    }
     Out("\t/>\n");
 
-    if (fullDump) {
-        AutoFreeW fontlist(engine->GetProperty(DocumentProperty::FontList));
-        if (fontlist) {
-            WStrVec fonts;
-            fonts.Split(fontlist, L"\n");
-            str = Escape(fonts.Join(L"\n\t\t"));
-            Out("\t<FontList>\n\t\t%s\n\t</FontList>\n", str.Get());
-        }
+    if (!fullDump) {
+        return;
+    }
+    AutoFreeWstr fontlist(engine->GetProperty(DocumentProperty::FontList));
+    if (fontlist) {
+        WStrVec fonts;
+        fonts.Split(fontlist, L"\n");
+        str = Escape(fonts.Join(L"\n\t\t"));
+        Out("\t<FontList>\n\t\t%s\n\t</FontList>\n", str.Get());
     }
 }
 
 // caller must free() the result
-char* DestRectToStr(BaseEngine* engine, PageDestination* dest) {
-    if (AutoFreeW(dest->GetDestName())) {
-        OwnedData name(Escape(dest->GetDestName()));
+char* DestRectToStr(EngineBase* engine, PageDestination* dest) {
+    WCHAR* destName = dest->GetName();
+    if (destName) {
+        AutoFree name = Escape(destName);
         return str::Format("Name=\"%s\"", name.Get());
     }
     // as handled by LinkHandler::ScrollTo in WindowInfo.cpp
-    int pageNo = dest->GetDestPageNo();
+    int pageNo = dest->GetPageNo();
     if (pageNo <= 0 || pageNo > engine->PageCount())
         return nullptr;
-    RectD rect = dest->GetDestRect();
+    RectD rect = dest->GetRect();
     if (rect.IsEmpty()) {
         PointD pt = engine->Transform(rect.TL(), pageNo, 1.0, 0);
         return str::Format("Point=\"%.0f %.0f\"", pt.x, pt.y);
@@ -137,9 +171,9 @@ char* DestRectToStr(BaseEngine* engine, PageDestination* dest) {
     return nullptr;
 }
 
-void DumpTocItem(BaseEngine* engine, DocTocItem* item, int level, int& idCounter) {
+void DumpTocItem(EngineBase* engine, TocItem* item, int level, int& idCounter) {
     for (; item; item = item->next) {
-        OwnedData title(Escape(str::Dup(item->title)));
+        AutoFree title(Escape(item->title));
         for (int i = 0; i < level; i++)
             Out("\t");
         Out("<Item Title=\"%s\"", title.Get());
@@ -147,13 +181,13 @@ void DumpTocItem(BaseEngine* engine, DocTocItem* item, int level, int& idCounter
             Out(" Page=\"%d\"", item->pageNo);
         if (item->id != ++idCounter)
             Out(" Id=\"%d\"", item->id);
-        if (item->GetLink()) {
-            PageDestination* dest = item->GetLink();
-            OwnedData target(Escape(dest->GetDestValue()));
+        if (item->GetPageDestination()) {
+            PageDestination* dest = item->GetPageDestination();
+            AutoFree target = Escape(dest->GetValue());
             if (target.Get())
                 Out(" Target=\"%s\"", target.Get());
-            if (item->pageNo != dest->GetDestPageNo())
-                Out(" TargetPage=\"%d\"", dest->GetDestPageNo());
+            if (item->pageNo != dest->GetPageNo())
+                Out(" TargetPage=\"%d\"", dest->GetPageNo());
             AutoFree rectStr(DestRectToStr(engine, dest));
             if (rectStr)
                 Out(" Target%s", rectStr.Get());
@@ -161,7 +195,7 @@ void DumpTocItem(BaseEngine* engine, DocTocItem* item, int level, int& idCounter
         if (!item->child)
             Out(" />\n");
         else {
-            if (item->open)
+            if (item->isOpenDefault)
                 Out(" Expanded=\"yes\"");
             Out(">\n");
             DumpTocItem(engine, item->child, level + 1, idCounter);
@@ -172,69 +206,40 @@ void DumpTocItem(BaseEngine* engine, DocTocItem* item, int level, int& idCounter
     }
 }
 
-void DumpToc(BaseEngine* engine) {
-    DocTocItem* root = engine->GetTocTree();
+void DumpToc(EngineBase* engine) {
+    TocTree* tree = engine->GetToc();
+    if (!tree) {
+        return;
+    }
+    auto* root = tree->root;
     if (root) {
-        Out("\t<TocTree%s>\n", engine->HasTocTree() ? "" : " Expected=\"no\"");
+        Out("\t<TocTree%s>\n", engine->HacToc() ? "" : " Expected=\"no\"");
         int idCounter = 0;
         DumpTocItem(engine, root, 2, idCounter);
         Out("\t</TocTree>\n");
-    } else if (engine->HasTocTree())
+    } else if (engine->HacToc()) {
         Out("\t<TocTree />\n");
-    delete root;
-}
-
-const char* ElementTypeToStr(PageElement* el) {
-    switch (el->GetType()) {
-        case PageElementType::Link:
-            return "Link";
-        case PageElementType::Image:
-            return "Image";
-        case PageElementType::Comment:
-            return "Comment";
-        default:
-            return "Unknown";
     }
 }
 
-const char* PageDestToStr(PageDestType destType) {
-#define HandleType(type)                  \
-    if (destType == PageDestType::##type) \
-        return #type;
-#define HandleTypeDialog(type)                    \
-    if (destType == PageDestType::##type##Dialog) \
-        return #type;
-    // common actions
-    HandleType(ScrollTo);
-    HandleType(LaunchURL);
-    HandleType(LaunchEmbedded);
-    HandleType(LaunchFile);
-    // named actions
-    HandleType(NextPage);
-    HandleType(PrevPage);
-    HandleType(FirstPage);
-    HandleType(LastPage);
-    HandleTypeDialog(Find);
-    HandleType(FullScreen);
-    HandleType(GoBack);
-    HandleType(GoForward);
-    HandleTypeDialog(GoToPage);
-    HandleTypeDialog(Print);
-    HandleTypeDialog(SaveAs);
-    HandleTypeDialog(ZoomTo);
-#undef HandleType
-#undef HandleTypeDialog
-    CrashIf(destType != PageDestType::None);
-    return nullptr;
+const char* ElementTypeToStr(PageElement* el) {
+    if (!el->kind) {
+        return "unknown";
+    }
+    return el->kind;
 }
 
-void DumpPageContent(BaseEngine* engine, int pageNo, bool fullDump) {
+const char* PageDestToStr(Kind kind) {
+    return kind;
+}
+
+void DumpPageContent(EngineBase* engine, int pageNo, bool fullDump) {
     // ensure that the page is loaded
     engine->BenchLoadPage(pageNo);
 
     Out("\t<Page Number=\"%d\"\n", pageNo);
     if (engine->HasPageLabels()) {
-        OwnedData label(Escape(engine->GetPageLabel(pageNo)));
+        AutoFree label(Escape(engine->GetPageLabel(pageNo)));
         Out("\t\tLabel=\"%s\"\n", label.Get());
     }
     RectI bbox = engine->PageMediabox(pageNo).Round();
@@ -247,9 +252,10 @@ void DumpPageContent(BaseEngine* engine, int pageNo, bool fullDump) {
     Out("\t>\n");
 
     if (fullDump) {
-        OwnedData text(Escape(engine->ExtractPageText(pageNo, L"\n")));
-        if (text.Get())
+        AutoFree text(Escape(engine->ExtractPageText(pageNo)));
+        if (text.Get()) {
             Out("\t\t<TextContent>\n%s\t\t</TextContent>\n", text.Get());
+        }
     }
 
     Vec<PageElement*>* els = engine->GetElements(pageNo);
@@ -261,18 +267,18 @@ void DumpPageContent(BaseEngine* engine, int pageNo, bool fullDump) {
                 rect.x, rect.y, rect.dx, rect.dy);
             PageDestination* dest = els->at(i)->AsLink();
             if (dest) {
-                if (dest->GetDestType() != PageDestType::None)
-                    Out("\t\t\t\tLinkType=\"%s\"\n", PageDestToStr(dest->GetDestType()));
-                OwnedData value(Escape(dest->GetDestValue()));
+                if (dest->Kind() != nullptr)
+                    Out("\t\t\t\tLinkType=\"%s\"\n", dest->Kind());
+                AutoFree value(Escape(dest->GetValue()));
                 if (value.Get())
                     Out("\t\t\t\tLinkTarget=\"%s\"\n", value.Get());
-                if (dest->GetDestPageNo())
-                    Out("\t\t\t\tLinkedPage=\"%d\"\n", dest->GetDestPageNo());
+                if (dest->GetPageNo())
+                    Out("\t\t\t\tLinkedPage=\"%d\"\n", dest->GetPageNo());
                 AutoFree rectStr(DestRectToStr(engine, dest));
                 if (rectStr)
                     Out("\t\t\t\tLinked%s\n", rectStr.Get());
             }
-            OwnedData name(Escape(els->at(i)->GetValue()));
+            AutoFree name(Escape(els->at(i)->GetValue()));
             if (name.Get())
                 Out("\t\t\t\tLabel=\"%s\"\n", name.Get());
             Out("\t\t\t/>\n");
@@ -285,7 +291,7 @@ void DumpPageContent(BaseEngine* engine, int pageNo, bool fullDump) {
     Out("\t</Page>\n");
 }
 
-void DumpThumbnail(BaseEngine* engine) {
+void DumpThumbnail(EngineBase* engine) {
     RectD rect = engine->Transform(engine->PageMediabox(1), 1, 1.0, 0);
     if (rect.IsEmpty()) {
         Out("\t<Thumbnail />\n");
@@ -295,7 +301,8 @@ void DumpThumbnail(BaseEngine* engine) {
     float zoom = std::min(128 / (float)rect.dx, 128 / (float)rect.dy) - 0.001f;
     RectI thumb = RectD(0, 0, rect.dx * zoom, rect.dy * zoom).Round();
     rect = engine->Transform(thumb.Convert<double>(), 1, zoom, 0, true);
-    RenderedBitmap* bmp = engine->RenderBitmap(1, zoom, 0, &rect);
+    RenderPageArgs args(1, zoom, 0, &rect);
+    RenderedBitmap* bmp = engine->RenderPage(args);
     if (!bmp) {
         Out("\t<Thumbnail />\n");
         return;
@@ -312,7 +319,7 @@ void DumpThumbnail(BaseEngine* engine) {
     delete bmp;
 }
 
-void DumpData(BaseEngine* engine, bool fullDump) {
+void DumpData(EngineBase* engine, bool fullDump) {
     Out(UTF8_BOM);
     Out("<?xml version=\"1.0\"?>\n");
     Out("<EngineDump>\n");
@@ -346,28 +353,30 @@ bool CheckRenderPath(const WCHAR* path) {
     return true;
 }
 
-bool RenderDocument(BaseEngine* engine, const WCHAR* renderPath, float zoom = 1.f, bool silent = false) {
+bool RenderDocument(EngineBase* engine, const WCHAR* renderPath, float zoom = 1.f, bool silent = false) {
     if (!CheckRenderPath(renderPath))
         return false;
 
     if (str::EndsWithI(renderPath, L".txt")) {
-        str::Str<WCHAR> text(1024);
-        for (int pageNo = 1; pageNo <= engine->PageCount(); pageNo++)
-            text.AppendAndFree(engine->ExtractPageText(pageNo, L"\r\n", nullptr, RenderTarget::Export));
+        str::WStr text(1024);
+        for (int pageNo = 1; pageNo <= engine->PageCount(); pageNo++) {
+            text.AppendAndFree(engine->ExtractPageText(pageNo, nullptr));
+        }
+        text.Replace(L"\n", L"\r\n");
         if (silent)
             return true;
-        AutoFreeW txtFilePath(str::Format(renderPath, 0));
-        OwnedData textUTF8(str::conv::ToUtf8(text.Get()));
+        AutoFreeWstr txtFilePath(str::Format(renderPath, 0));
+        AutoFree textUTF8 = strconv::WstrToUtf8(text.Get());
         AutoFree textUTF8BOM(str::Join(UTF8_BOM, textUTF8.Get()));
-        return file::WriteFile(txtFilePath, textUTF8BOM.Get(), str::Len(textUTF8BOM));
+        return file::WriteFile(txtFilePath, textUTF8BOM.as_view());
     }
 
     if (str::EndsWithI(renderPath, L".pdf")) {
         if (silent) {
             return false;
         }
-        AutoFreeW pdfFilePath(str::Format(renderPath, 0));
-        OwnedData pathUtf8(str::conv::ToUtf8(pdfFilePath.Get()));
+        AutoFreeWstr pdfFilePath(str::Format(renderPath, 0));
+        AutoFree pathUtf8(strconv::WstrToUtf8(pdfFilePath.Get()));
         if (engine->SaveFileAsPDF(pathUtf8.Get(), true)) {
             return true;
         }
@@ -376,7 +385,8 @@ bool RenderDocument(BaseEngine* engine, const WCHAR* renderPath, float zoom = 1.
 
     bool success = true;
     for (int pageNo = 1; pageNo <= engine->PageCount(); pageNo++) {
-        RenderedBitmap* bmp = engine->RenderBitmap(pageNo, zoom, 0);
+        RenderPageArgs args(pageNo, zoom, 0);
+        RenderedBitmap* bmp = engine->RenderPage(args);
         success &= bmp != nullptr;
         if (!bmp && !silent)
             ErrOut("Error: Failed to render page %d for %s!", pageNo, engine->FileName());
@@ -384,21 +394,23 @@ bool RenderDocument(BaseEngine* engine, const WCHAR* renderPath, float zoom = 1.
             delete bmp;
             continue;
         }
-        AutoFreeW pageBmpPath(str::Format(renderPath, pageNo));
+        AutoFreeWstr pageBmpPath(str::Format(renderPath, pageNo));
         if (str::EndsWithI(pageBmpPath, L".png")) {
-            Bitmap gbmp(bmp->GetBitmap(), nullptr);
+            Gdiplus::Bitmap gbmp(bmp->GetBitmap(), nullptr);
             CLSID pngEncId = GetEncoderClsid(L"image/png");
             gbmp.Save(pageBmpPath, &pngEncId);
         } else if (str::EndsWithI(pageBmpPath, L".bmp")) {
             size_t bmpDataLen;
             AutoFree bmpData((char*)SerializeBitmap(bmp->GetBitmap(), &bmpDataLen));
-            if (bmpData)
-                file::WriteFile(pageBmpPath, bmpData, bmpDataLen);
+            if (!bmpData.empty()) {
+                file::WriteFile(pageBmpPath, bmpData.as_view());
+            }
         } else { // render as TGA for all other file extensions
             size_t tgaDataLen;
-            ScopedMem<unsigned char> tgaData(tga::SerializeBitmap(bmp->GetBitmap(), &tgaDataLen));
-            if (tgaData)
-                file::WriteFile(pageBmpPath, tgaData, tgaDataLen);
+            AutoFree tgaData(tga::SerializeBitmap(bmp->GetBitmap(), &tgaDataLen));
+            if (!tgaData.empty()) {
+                file::WriteFile(pageBmpPath, {tgaData, tgaDataLen});
+            }
         }
         delete bmp;
     }
@@ -410,7 +422,8 @@ class PasswordHolder : public PasswordUI {
     const WCHAR* password;
 
   public:
-    explicit PasswordHolder(const WCHAR* password) : password(password) {}
+    explicit PasswordHolder(const WCHAR* password) : password(password) {
+    }
     virtual WCHAR* GetPassword(const WCHAR* fileName, unsigned char* fileDigest, unsigned char decryptionKeyOut[32],
                                bool* saveKey) {
         UNUSED(fileName);
@@ -431,11 +444,12 @@ int main(int argc, char** argv) {
     ParseCmdLine(GetCommandLine(), argList);
     if (argList.size() < 2) {
     Usage:
-        ErrOut("%s [-pwd <password>][-quick][-render <path-%%d.tga>] <filename>", path::GetBaseName(argList.at(0)));
+        ErrOut("%s [-pwd <password>][-quick][-render <path-%%d.tga>] <filename>",
+               path::GetBaseNameNoFree(argList.at(0)));
         return 2;
     }
 
-    AutoFreeW filePath;
+    AutoFreeWstr filePath;
     WCHAR* password = nullptr;
     bool fullDump = true;
     WCHAR* renderPath = nullptr;
@@ -501,17 +515,16 @@ int main(int argc, char** argv) {
     // embedded documents are referred to by an invalid path
     // containing more information after a colon (e.g. "C:\file.pdf:3:0")
     if (INVALID_HANDLE_VALUE != hfind) {
-        AutoFreeW dir(path::GetDir(filePath));
+        AutoFreeWstr dir(path::GetDir(filePath));
         filePath.Set(path::Join(dir, fdata.cFileName));
         FindClose(hfind);
     }
 
-    EngineType engineType;
     PasswordHolder pwdUI(password);
-    BaseEngine* engine = EngineManager::CreateEngine(filePath, &pwdUI, &engineType);
+    EngineBase* engine = EngineManager::CreateEngine(filePath, &pwdUI);
 #ifdef DEBUG
-    bool couldLeak = engineType == EngineType::DjVu || DjVuEngine::IsSupportedFile(filePath) ||
-                     DjVuEngine::IsSupportedFile(filePath, true);
+    bool isEngineDjVu = IsOfKind(engine, kindEngineDjVu);
+    bool couldLeak = isEngineDjVu || IsDjVuEngineSupportedFile(filePath) || IsDjVuEngineSupportedFile(filePath, true);
     if (!couldLeak) {
         // report memory leaks on stderr for engines that shouldn't leak
         _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
@@ -520,7 +533,7 @@ int main(int argc, char** argv) {
     }
 #endif
     if (!engine) {
-        ErrOut("Error: Couldn't create an engine for %s!", path::GetBaseName(filePath));
+        ErrOut("Error: Couldn't create an engine for %s!", path::GetBaseNameNoFree(filePath));
         return 1;
     }
     Vec<PageAnnotation>* userAnnots = LoadFileModifications(engine->FileName());

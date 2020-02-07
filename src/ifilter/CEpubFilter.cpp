@@ -1,14 +1,16 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/Archive.h"
+#include "utils/GdiPlusUtil.h"
 #include "utils/HtmlParserLookup.h"
 #include "utils/HtmlPullParser.h"
 #include "utils/WinUtil.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "EbookDoc.h"
 
@@ -32,19 +34,21 @@ HRESULT CEpubFilter::OnInit() {
 
     // load content of EPUB document into a seekable stream
     HRESULT res;
-    size_t len;
-    void* data = GetDataFromStream(m_pStream, &len, &res);
-    if (!data)
+    AutoFree data = GetDataFromStream(m_pStream, &res);
+    if (data.empty()) {
         return res;
+    }
 
-    ScopedComPtr<IStream> stream(CreateStreamFromData(data, len));
-    free(data);
-    if (!stream)
+    auto strm = CreateStreamFromData(data.as_view());
+    ScopedComPtr<IStream> stream(strm);
+    if (!stream) {
         return E_FAIL;
+    }
 
     m_epubDoc = EpubDoc::CreateFromStream(stream);
-    if (!m_epubDoc)
+    if (!m_epubDoc) {
         return E_FAIL;
+    }
 
     m_state = STATE_EPUB_START;
     return S_OK;
@@ -54,8 +58,10 @@ HRESULT CEpubFilter::OnInit() {
 static bool IsoDateParse(const WCHAR* isoDate, SYSTEMTIME* timeOut) {
     ZeroMemory(timeOut, sizeof(SYSTEMTIME));
     const WCHAR* end = str::Parse(isoDate, L"%4d-%2d-%2d", &timeOut->wYear, &timeOut->wMonth, &timeOut->wDay);
-    if (end) // time is optional
+    if (end) {
+        // time is optional
         str::Parse(end, L"T%2d:%2d:%2dZ", &timeOut->wHour, &timeOut->wMinute, &timeOut->wSecond);
+    }
     return end != nullptr;
     // don't bother about the day of week, we won't display it anyway
 }
@@ -65,7 +71,7 @@ static WCHAR* ExtractHtmlText(EpubDoc* doc) {
     size_t len = d.size();
     const char* data = d.data();
 
-    str::Str<char> text(len / 2);
+    str::Str text(len / 2);
     HtmlPullParser p(data, len);
     HtmlToken* t;
     Vec<HtmlTag> tagNesting;
@@ -77,16 +83,18 @@ static WCHAR* ExtractHtmlText(EpubDoc* doc) {
                 t->s++;
                 t->sLen--;
             }
-            while (t->sLen > 0 && str::IsWs(t->s[t->sLen - 1]))
+            while (t->sLen > 0 && str::IsWs(t->s[t->sLen - 1])) {
                 t->sLen--;
+            }
             if (t->sLen > 0) {
                 text.AppendAndFree(ResolveHtmlEntities(t->s, t->sLen));
-                text.Append(' ');
+                text.AppendChar(' ');
             }
         } else if (t->IsStartTag()) {
             // TODO: force-close tags similar to HtmlFormatter.cpp's AutoCloseOnOpen?
-            if (!IsTagSelfClosing(t->tag))
+            if (!IsTagSelfClosing(t->tag)) {
                 tagNesting.Append(t->tag);
+            }
         } else if (t->IsEndTag()) {
             if (!IsInlineTag(t->tag) && text.size() > 0 && text.Last() == ' ') {
                 text.Pop();
@@ -96,19 +104,21 @@ static WCHAR* ExtractHtmlText(EpubDoc* doc) {
             // there are only potentially self-closing tags on the
             // stack between the matching tag, we pop all of them
             if (tagNesting.Contains(t->tag)) {
-                while (tagNesting.Last() != t->tag)
+                while (tagNesting.Last() != t->tag) {
                     tagNesting.Pop();
+                }
             }
-            if (tagNesting.size() > 0 && tagNesting.Last() == t->tag)
+            if (tagNesting.size() > 0 && tagNesting.Last() == t->tag) {
                 tagNesting.Pop();
+            }
         }
     }
 
-    return str::conv::FromUtf8(text.Get());
+    return strconv::Utf8ToWstr(text.Get());
 }
 
 HRESULT CEpubFilter::GetNextChunkValue(CChunkValue& chunkValue) {
-    AutoFreeW str;
+    AutoFreeWstr str;
 
     switch (m_state) {
         case STATE_EPUB_START:

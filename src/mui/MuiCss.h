@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 namespace css {
@@ -134,7 +134,9 @@ struct ColorData {
     };
 
     bool operator==(const ColorData& other) const;
-    bool IsTransparent() const { return type == ColorSolid && solid.color == 0; }
+    bool IsTransparent() const {
+        return type == ColorSolid && solid.color == 0;
+    }
 };
 
 struct Padding {
@@ -145,7 +147,8 @@ struct Padding {
 };
 
 struct Prop {
-    Prop(PropType type) : type(type) {}
+    Prop(PropType type) : type(type) {
+    }
 
     void Free();
 
@@ -211,7 +214,9 @@ class Style {
     void SetPadding(int top, int right, int bottom, int left);
 
     Style* GetInheritsFrom() const;
-    void SetInheritsFrom(Style* parent) { inheritsFrom = parent; }
+    void SetInheritsFrom(Style* parent) {
+        inheritsFrom = parent;
+    }
     size_t GetIdentity() const;
 };
 
@@ -258,10 +263,10 @@ CachedStyle* CacheStyle(Style* style, bool* changedOut);
 CachedStyle* CachedStyleByName(const char* name);
 Style* StyleByName(const char* name);
 
-Brush* BrushFromColorData(ColorData* color, const Rect& r);
+Brush* BrushFromColorData(ColorData* color, const Gdiplus::Rect& r);
 Brush* BrushFromColorData(ColorData* color, const RectF& r);
 
 ARGB ParseCssColor(const char* color);
-Size GetBorderAndPaddingSize(CachedStyle* s);
+Gdiplus::Size GetBorderAndPaddingSize(CachedStyle* s);
 
 } // namespace css

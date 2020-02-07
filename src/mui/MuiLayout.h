@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 // WPF-like layout system. Measure() should update DesiredSize()
@@ -17,11 +17,13 @@ class ILayout {
         if (n)
             name.SetCopy(n);
     }
-    bool IsNamed(const char* s) const { return str::EqI(name.Get(), s); }
+    bool IsNamed(const char* s) const {
+        return str::EqI(name.Get(), s);
+    }
     virtual ~ILayout(){};
-    virtual Size Measure(const Size availableSize) = 0;
-    virtual Size DesiredSize() = 0;
-    virtual void Arrange(const Rect finalRect) = 0;
+    virtual Gdiplus::Size Measure(const Gdiplus::Size availableSize) = 0;
+    virtual Gdiplus::Size DesiredSize() = 0;
+    virtual void Arrange(const Gdiplus::Rect finalRect) = 0;
 };
 
 #define SizeSelf 666.f
@@ -55,16 +57,18 @@ struct DirectionalLayoutData {
     // data to be used during layout process
 
     // desiredSize of the element after Measure() step
-    Size desiredSize;
+    Gdiplus::Size desiredSize;
 
-    DirectionalLayoutData() : alignNonLayoutAxis(GetElAlignCenter()) {}
+    DirectionalLayoutData() : alignNonLayoutAxis(GetElAlignCenter()) {
+    }
 
     DirectionalLayoutData(const DirectionalLayoutData& other)
         : element(other.element),
           sizeLayoutAxis(other.sizeLayoutAxis),
           sizeNonLayoutAxis(other.sizeNonLayoutAxis),
           alignNonLayoutAxis(other.alignNonLayoutAxis),
-          desiredSize(other.desiredSize) {}
+          desiredSize(other.desiredSize) {
+    }
 
     void Set(ILayout* el, float sla, float snla, const ElAlignData& a) {
         element = el;
@@ -77,16 +81,18 @@ struct DirectionalLayoutData {
 class DirectionalLayout : public ILayout {
   protected:
     Vec<DirectionalLayoutData> els;
-    Size desiredSize;
+    Gdiplus::Size desiredSize;
 
   public:
     ~DirectionalLayout() override;
-    Size DesiredSize() override { return desiredSize; }
+    Gdiplus::Size DesiredSize() override {
+        return desiredSize;
+    }
 
     DirectionalLayout& Add(const DirectionalLayoutData& ld);
 
-    Size Measure(const Size availableSize) override;
-    void Arrange(const Rect finalRect) override {
+    Gdiplus::Size Measure(const Gdiplus::Size availableSize) override;
+    void Arrange(const Gdiplus::Rect finalRect) override {
         UNUSED(finalRect);
         CrashIf(true);
     }
@@ -94,14 +100,16 @@ class DirectionalLayout : public ILayout {
 
 class HorizontalLayout : public DirectionalLayout {
   public:
-    HorizontalLayout() {}
+    HorizontalLayout() {
+    }
 
-    void Arrange(const Rect finalRect) override;
+    void Arrange(const Gdiplus::Rect finalRect) override;
 };
 
 class VerticalLayout : public DirectionalLayout {
   public:
-    VerticalLayout() {}
+    VerticalLayout() {
+    }
 
-    void Arrange(const Rect finalRect) override;
+    void Arrange(const Gdiplus::Rect finalRect) override;
 };

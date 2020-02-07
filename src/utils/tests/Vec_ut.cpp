@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
@@ -49,7 +49,7 @@ static void WStrVecTest() {
         utassert(count == 5 && v2.Find(L"c") == 3);
         utassert(v2.Find(L"") == 2 && v2.Find(L"", 3) == 4 && v2.Find(L"", 5) == -1);
         utassert(v2.Find(L"B") == -1 && v2.FindI(L"B") == 1);
-        AutoFreeW joined(v2.Join(L";"));
+        AutoFreeWstr joined(v2.Join(L";"));
         utassert(str::Eq(joined, L"a;b;;c;"));
     }
 
@@ -57,9 +57,9 @@ static void WStrVecTest() {
         WStrVec v2;
         size_t count = v2.Split(L"a,b,,c,", L",", true);
         utassert(count == 3 && v2.Find(L"c") == 2);
-        AutoFreeW joined(v2.Join(L";"));
+        AutoFreeWstr joined(v2.Join(L";"));
         utassert(str::Eq(joined, L"a;b;c"));
-        AutoFreeW last(v2.Pop());
+        AutoFreeWstr last(v2.Pop());
         utassert(v2.size() == 2 && str::Eq(last, L"c"));
     }
 }
@@ -79,7 +79,7 @@ static void StrListTest() {
 }
 
 static size_t VecTestAppendFmt() {
-    str::Str<char> v(256);
+    str::Str v(256);
     int64_t val = 1;
     for (int i = 0; i < 10000; i++) {
         v.AppendFmt("i%" PRId64 "e", val);
@@ -137,7 +137,7 @@ void VecTest() {
 
     {
         char buf[2] = {'a', '\0'};
-        str::Str<char> v(0);
+        str::Str v(0);
         for (int i = 0; i < 7; i++) {
             v.Append(buf, 1);
             buf[0] = buf[0] + 1;
@@ -151,7 +151,7 @@ void VecTest() {
     }
 
     {
-        str::Str<char> v(128);
+        str::Str v(128);
         v.Append("boo", 3);
         utassert(str::Eq("boo", v.LendData()));
         utassert(v.size() == 3);
@@ -161,7 +161,7 @@ void VecTest() {
         v.RemoveAt(2, 3);
         utassert(v.size() == 3);
         utassert(str::Eq("bop", v.LendData()));
-        v.Append('a');
+        v.AppendChar('a');
         utassert(v.size() == 4);
         utassert(str::Eq("bopa", v.LendData()));
         char* s = v.StealData();
@@ -171,12 +171,12 @@ void VecTest() {
     }
 
     {
-        str::Str<char> v(0);
+        str::Str v(0);
         for (size_t i = 0; i < 32; i++) {
             utassert(v.size() == i * 6);
             v.Append("lambd", 5);
             if (i % 2 == 0)
-                v.Append('a');
+                v.AppendChar('a');
             else
                 v.Push('a');
         }
@@ -240,6 +240,12 @@ void VecTest() {
         Vec<int> v;
         v.InsertAt(2, 2);
         utassert(v.size() == 3 && v.at(0) == 0 && v.at(2) == 2);
+    }
+
+    {
+        str::Str v;
+        v.Append("foo");
+        utassert(v.size() == 3);
     }
 
     WStrVecTest();

@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -6,7 +6,9 @@
 #include <UIAutomationCoreApi.h>
 #include <OleAcc.h>
 #include "utils/ScopedWin.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
 #include "EngineManager.h"
@@ -174,7 +176,7 @@ HRESULT STDMETHODCALLTYPE SumatraUIAutomationPageProvider::GetPropertyValue(PROP
 
     if (propertyId == UIA_NamePropertyId) {
         pRetVal->vt = VT_BSTR;
-        pRetVal->bstrVal = SysAllocString(AutoFreeW(str::Format(L"Page %d", pageNum)));
+        pRetVal->bstrVal = SysAllocString(AutoFreeWstr(str::Format(L"Page %d", pageNum)));
         return S_OK;
     } else if (propertyId == UIA_IsValuePatternAvailablePropertyId) {
         pRetVal->vt = VT_BOOL;

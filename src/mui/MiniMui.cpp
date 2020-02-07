@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 // as little of mui as necessary to make ../EngineDump.cpp compile
@@ -13,7 +13,7 @@ namespace mui {
 
 HFONT CachedFont::GetHFont() {
     if (!hFont) {
-        LOGFONTW lf;
+        LOGFONTW lf{};
         // TODO: Graphics is probably only used for metrics,
         // so this might not be 100% correct (e.g. 2 monitors with different DPIs?)
         // but previous code wasn't much better
@@ -84,7 +84,9 @@ class GlobalGraphicsHack {
   public:
     Graphics gfx;
 
-    GlobalGraphicsHack() : bmp(1, 1, PixelFormat32bppARGB), gfx(&bmp) { InitGraphicsMode(&gfx); }
+    GlobalGraphicsHack() : bmp(1, 1, PixelFormat32bppARGB), gfx(&bmp) {
+        InitGraphicsMode(&gfx);
+    }
 };
 
 static GlobalGraphicsHack* gGraphicsHack = nullptr;

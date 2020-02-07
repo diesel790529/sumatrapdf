@@ -1,24 +1,27 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/WinUtil.h"
-#include "BaseEngine.h"
-#include "PdfEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
+#include "EnginePdf.h"
+#include "EngineXps.h"
 #if defined(BUILD_EPUB_PREVIEW) || defined(BUILD_FB2_PREVIEW) || defined(BUILD_MOBI_PREVIEW)
 #include "mui/MiniMui.h"
-#include "EbookEngine.h"
+#include "EngineEbook.h"
 #endif
 #if defined(BUILD_CBZ_PREVIEW) || defined(BUILD_CBR_PREVIEW) || defined(BUILD_CB7_PREVIEW) || \
     defined(BUILD_CBT_PREVIEW) || defined(BUILD_TGA_PREVIEW)
-#include "ImagesEngine.h"
+#include "EngineImages.h"
 #endif
 #include "PdfPreview.h"
 #include "PdfPreviewBase.h"
 
 IFACEMETHODIMP PreviewBase::GetThumbnail(UINT cx, HBITMAP* phbmp, WTS_ALPHATYPE* pdwAlpha) {
-    BaseEngine* engine = GetEngine();
+    EngineBase* engine = GetEngine();
     if (!engine)
         return E_FAIL;
 
@@ -36,21 +39,25 @@ IFACEMETHODIMP PreviewBase::GetThumbnail(UINT cx, HBITMAP* phbmp, WTS_ALPHATYPE*
 
     unsigned char* bmpData = nullptr;
     HBITMAP hthumb = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, (void**)&bmpData, nullptr, 0);
-    if (!hthumb)
+    if (!hthumb) {
         return E_OUTOFMEMORY;
+    }
 
     page = engine->Transform(thumb.Convert<double>(), 1, zoom, 0, true);
-    RenderedBitmap* bmp = engine->RenderBitmap(1, zoom, 0, &page);
+    RenderPageArgs args(1, zoom, 0, &page);
+    RenderedBitmap* bmp = engine->RenderPage(args);
 
     HDC hdc = GetDC(nullptr);
     if (bmp && GetDIBits(hdc, bmp->GetBitmap(), 0, thumb.dy, bmpData, &bmi, DIB_RGB_COLORS)) {
         // cf. http://msdn.microsoft.com/en-us/library/bb774612(v=VS.85).aspx
-        for (int i = 0; i < thumb.dx * thumb.dy; i++)
+        for (int i = 0; i < thumb.dx * thumb.dy; i++) {
             bmpData[4 * i + 3] = 0xFF;
+        }
 
         *phbmp = hthumb;
-        if (pdwAlpha)
+        if (pdwAlpha) {
             *pdwAlpha = WTSAT_RGB;
+        }
     } else {
         DeleteObject(hthumb);
         hthumb = nullptr;
@@ -67,7 +74,7 @@ IFACEMETHODIMP PreviewBase::GetThumbnail(UINT cx, HBITMAP* phbmp, WTS_ALPHATYPE*
 #define UWM_PAINT_AGAIN (WM_USER + 1)
 
 class PageRenderer {
-    BaseEngine* engine;
+    EngineBase* engine;
     HWND hwnd;
 
     int currPage;
@@ -91,7 +98,7 @@ class PageRenderer {
     bool preventRecursion;
 
   public:
-    PageRenderer(BaseEngine* engine, HWND hwnd)
+    PageRenderer(EngineBase* engine, HWND hwnd)
         : engine(engine),
           hwnd(hwnd),
           currPage(0),
@@ -145,8 +152,8 @@ class PageRenderer {
         ScopedCom comScope; // because the engine reads data from a COM IStream
 
         PageRenderer* pr = (PageRenderer*)data;
-        RenderedBitmap* bmp =
-            pr->engine->RenderBitmap(pr->reqPage, pr->reqZoom, 0, nullptr, RenderTarget::View, &pr->abortCookie);
+        RenderPageArgs args(pr->reqPage, pr->reqZoom, 0, nullptr, RenderTarget::View, &pr->abortCookie);
+        RenderedBitmap* bmp = pr->engine->RenderPage(args);
 
         ScopedCritSec scope(&pr->currAccess);
 
@@ -155,8 +162,9 @@ class PageRenderer {
             pr->currBmp = bmp;
             pr->currPage = pr->reqPage;
             pr->currSize = pr->reqSize;
-        } else
+        } else {
             delete bmp;
+        }
         delete pr->abortCookie;
         pr->abortCookie = nullptr;
 
@@ -309,7 +317,7 @@ IFACEMETHODIMP PreviewBase::DoPreview() {
     this->renderer = nullptr;
     SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
 
-    BaseEngine* engine = GetEngine();
+    EngineBase* engine = GetEngine();
     int pageCount = 1;
     if (engine) {
         pageCount = engine->PageCount();
@@ -331,21 +339,21 @@ IFACEMETHODIMP PreviewBase::DoPreview() {
     return S_OK;
 }
 
-BaseEngine* CPdfPreview::LoadEngine(IStream* stream) {
-    return PdfEngine::CreateFromStream(stream);
+EngineBase* CPdfPreview::LoadEngine(IStream* stream) {
+    return CreateEnginePdfFromStream(stream);
 }
 
 #ifdef BUILD_XPS_PREVIEW
-BaseEngine* CXpsPreview::LoadEngine(IStream* stream) {
-    return XpsEngine::CreateFromStream(stream);
+EngineBase* CXpsPreview::LoadEngine(IStream* stream) {
+    return CreateXpsEngineFromStream(stream);
 }
 #endif
 
 #ifdef BUILD_DJVU_PREVIEW
-#include "DjVuEngine.h"
+#include "EngineDjVu.h"
 
-BaseEngine* CDjVuPreview::LoadEngine(IStream* stream) {
-    return DjVuEngine::CreateFromStream(stream);
+EngineBase* CDjVuPreview::LoadEngine(IStream* stream) {
+    return CreateDjVuEngineFromStream(stream);
 }
 #endif
 
@@ -360,8 +368,8 @@ CEpubPreview::~CEpubPreview() {
     mui::Destroy();
 }
 
-BaseEngine* CEpubPreview::LoadEngine(IStream* stream) {
-    return EpubEngine::CreateFromStream(stream);
+EngineBase* CEpubPreview::LoadEngine(IStream* stream) {
+    return CreateEpubEngineFromStream(stream);
 }
 #endif
 
@@ -376,8 +384,8 @@ CFb2Preview::~CFb2Preview() {
     mui::Destroy();
 }
 
-BaseEngine* CFb2Preview::LoadEngine(IStream* stream) {
-    return Fb2Engine::CreateFromStream(stream);
+EngineBase* CFb2Preview::LoadEngine(IStream* stream) {
+    return CreateFb2EngineFromStream(stream);
 }
 #endif
 
@@ -392,21 +400,21 @@ CMobiPreview::~CMobiPreview() {
     mui::Destroy();
 }
 
-BaseEngine* CMobiPreview::LoadEngine(IStream* stream) {
-    return MobiEngine::CreateFromStream(stream);
+EngineBase* CMobiPreview::LoadEngine(IStream* stream) {
+    return CreateMobiEngineFromStream(stream);
 }
 #endif
 
 #if defined(BUILD_CBZ_PREVIEW) || defined(BUILD_CBR_PREVIEW) || defined(BUILD_CB7_PREVIEW) || defined(BUILD_CBT_PREVIEW)
 
-BaseEngine* CCbxPreview::LoadEngine(IStream* stream) {
-    return CbxEngine::CreateFromStream(stream);
+EngineBase* CCbxPreview::LoadEngine(IStream* stream) {
+    return CreateCbxEngineFromStream(stream);
 }
 #endif
 
 #ifdef BUILD_TGA_PREVIEW
 
-BaseEngine* CTgaPreview::LoadEngine(IStream* stream) {
-    return ImageEngine::CreateFromStream(stream);
+EngineBase* CTgaPreview::LoadEngine(IStream* stream) {
+    return CreateImageEngineFromStream(stream);
 }
 #endif

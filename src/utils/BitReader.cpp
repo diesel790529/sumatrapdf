@@ -1,8 +1,8 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
-#include "BaseUtil.h"
-#include "BitReader.h"
+#include "utils/BaseUtil.h"
+#include "utils/BitReader.h"
 
 // Bit reader is a streaming reader of bits from underlying memory data
 
@@ -11,7 +11,8 @@ BitReader::BitReader(uint8_t* data, size_t len) : data(data), dataLen(len), curr
     bitsCount = len * 8;
 }
 
-BitReader::~BitReader() {}
+BitReader::~BitReader() {
+}
 
 uint8_t BitReader::GetByte(size_t pos) {
     if (pos >= dataLen) {

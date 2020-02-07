@@ -1,11 +1,11 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
+#include "utils/Log.h"
 #include "utils/HtmlParserLookup.h"
 #include "Mui.h"
 #include "utils/GdiPlusUtil.h"
-#include "utils/DebugLog.h"
 
 namespace mui {
 
@@ -66,10 +66,10 @@ void Button::RecalculateSize(bool repaintIfSizeDidntChange) {
             fontDy = bbox.Height;
             float diff = fontDy + maxDiff - bbox.Height;
             if (diff < 0) {
-                OwnedData fontName = str::conv::ToUtf8(s->fontName);
-                OwnedData tmp = str::conv::ToUtf8(text);
-                dbglog::CrashLogF("fontDy=%.2f, bbox.Height=%.2f, diff=%.2f (should be > 0) font: %s, text='%s'",
-                                  fontDy, bbox.Height, diff, fontName.Get(), tmp.Get());
+                AutoFree fontName = strconv::WstrToUtf8(s->fontName);
+                AutoFree tmp = strconv::WstrToUtf8(text);
+                logf("fontDy=%.2f, bbox.Height=%.2f, diff=%.2f (should be > 0) font: %s, text='%s'\n", fontDy,
+                     bbox.Height, diff, fontName.Get(), tmp.Get());
                 CrashIf(true);
             }
         }

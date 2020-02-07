@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #ifndef BaseUtil_h
@@ -56,9 +56,6 @@
 #if OS_WIN
 #ifndef UNICODE
 #define UNICODE
-#endif
-#ifndef _UNICODE
-#define _UNICODE
 #endif
 #endif
 
@@ -129,6 +126,12 @@
 //#include <locale>
 
 typedef uint8_t u8;
+typedef int16_t i16;
+typedef uint16_t u16;
+typedef int32_t i32;
+typedef uint32_t u32;
+typedef int64_t i64;
+typedef uint64_t u64;
 
 // TODO: don't use INT_MAX and UINT_MAX
 #ifndef INT_MAX
@@ -193,6 +196,10 @@ inline void CrashMe() {
     char* p = nullptr;
     *p = 0;
 }
+inline void CrashMePort() {
+    char* p = nullptr;
+    *p = 0;
+}
 #if COMPILER_MSVC
 #pragma warning(pop)
 #endif
@@ -216,23 +223,36 @@ inline void CrashMe() {
 // in some builds, so it shouldn't contain the actual logic of the code
 
 inline void CrashIfFunc(bool cond) {
-#if defined(SVN_PRE_RELEASE_VER) || defined(DEBUG)
+    UNUSED(cond);
+#if defined(PRE_RELEASE_VER) || defined(DEBUG)
     if (cond) {
         CrashMe();
     }
-#else
+#endif
+}
+
+// must be provided somewhere else
+// could be a dummy implementation
+// For sumatra, it's in CrashHandler.cpp
+extern void SendCrashReport(const char*);
+
+inline void SendCrashIfFunc(bool cond, const char* condStr) {
     UNUSED(cond);
+    UNUSED(condStr);
+#if defined(PRE_RELEASE_VER) || defined(DEBUG)
+    if (cond) {
+        SendCrashReport(condStr);
+    }
 #endif
 }
 
 // Sometimes we want to assert only in debug build (not in pre-release)
-inline void CrashIfDebugOnlyFunc(bool cond) {
+inline void DebugCrashIfFunc(bool cond) {
+    UNUSED(cond);
 #if defined(DEBUG)
     if (cond) {
         CrashMe();
     }
-#else
-    UNUSED(cond);
 #endif
 }
 
@@ -247,10 +267,10 @@ inline void CrashIfDebugOnlyFunc(bool cond) {
 #define __analysis_assume(x)
 #endif
 
-#define CrashIfDebugOnly(cond)      \
+#define DebugCrashIf(cond)          \
     do {                            \
         __analysis_assume(!(cond)); \
-        CrashIfDebugOnlyFunc(cond); \
+        DebugCrashIfFunc(cond);     \
     }                               \
     while_0_nowarn
 
@@ -270,6 +290,13 @@ inline void CrashIfDebugOnlyFunc(bool cond) {
     }                               \
     while_0_nowarn
 
+#define SubmitCrashIf(cond)           \
+    do {                              \
+        __analysis_assume(!(cond));   \
+        SendCrashIfFunc(cond, #cond); \
+    }                                 \
+    while_0_nowarn
+
 // AssertCrash is like assert() but crashes like CrashIf()
 // It's meant to make converting assert() easier (converting to
 // CrashIf() requires inverting the condition, which can introduce bugs)
@@ -284,14 +311,16 @@ inline void CrashIfDebugOnlyFunc(bool cond) {
 void ZeroMemory(void* p, size_t len);
 #endif
 
+void* AllocZero(size_t count, size_t size);
+
 template <typename T>
-inline T* AllocArray(size_t n) {
-    return (T*)calloc(n, sizeof(T));
+FORCEINLINE T* AllocArray(size_t n) {
+    return (T*)AllocZero(n, sizeof(T));
 }
 
 template <typename T>
-inline T* AllocStruct() {
-    return (T*)calloc(1, sizeof(T));
+FORCEINLINE T* AllocStruct() {
+    return (T*)AllocZero(1, sizeof(T));
 }
 
 template <typename T>
@@ -307,11 +336,13 @@ inline void ZeroArray(T& a) {
 
 template <typename T>
 inline T limitValue(T val, T min, T max) {
-    CrashIf(min > max);
-    if (val < min)
+    DebugCrashIf(min > max);
+    if (val < min) {
         return min;
-    if (val > max)
+    }
+    if (val > max) {
         return max;
+    }
     return val;
 }
 
@@ -344,10 +375,12 @@ bool ListRemove(T** root, T* el) {
     T* curr;
     for (;;) {
         curr = *currPtr;
-        if (!curr)
+        if (!curr) {
             return false;
-        if (curr == el)
+        }
+        if (curr == el) {
             break;
+        }
         currPtr = &(curr->next);
     }
     *currPtr = el->next;
@@ -359,11 +392,12 @@ bool ListRemove(T** root, T* el) {
 // we want to use Vec but not use standard malloc()/free() functions
 class Allocator {
   public:
-    Allocator() {}
+    Allocator() {
+    }
     virtual ~Allocator(){};
     virtual void* Alloc(size_t size) = 0;
     virtual void* Realloc(void* mem, size_t size) = 0;
-    virtual void Free(void* mem) = 0;
+    virtual void Free(const void* mem) = 0;
 
     // helper functions that fallback to malloc()/free() if allocator is nullptr
     // helps write clients where allocator is optional
@@ -406,8 +440,12 @@ class PoolAllocator : public Allocator {
         size_t size;
         size_t free;
 
-        size_t Used() { return size - free; }
-        char* DataStart() { return (char*)this + sizeof(MemBlockNode); }
+        size_t Used() {
+            return size - free;
+        }
+        char* DataStart() {
+            return (char*)this + sizeof(MemBlockNode);
+        }
         // data follows here
     };
 
@@ -415,22 +453,23 @@ class PoolAllocator : public Allocator {
     MemBlockNode* firstBlock = nullptr;
 
   public:
-    explicit PoolAllocator() {}
+    explicit PoolAllocator() {
+    }
 
     void SetMinBlockSize(size_t newMinBlockSize);
     void SetAllocRounding(size_t newRounding);
     void FreeAll();
-    virtual ~PoolAllocator() override;
+    ~PoolAllocator() override;
     void AllocBlock(size_t minSize);
 
     // Allocator methods
-    virtual void* Realloc(void* mem, size_t size) override;
+    void* Realloc(void* mem, size_t size) override;
 
-    virtual void Free(void*) override {
+    virtual void Free(const void*) override {
         // does nothing, we can't free individual pieces of memory
     }
 
-    virtual void* Alloc(size_t size) override;
+    void* Alloc(size_t size) override;
 
     void* FindNthPieceOfSize(size_t size, size_t n) const;
 
@@ -456,8 +495,12 @@ class PoolAllocator : public Allocator {
             CrashIf(block && block->Used() == 0);
         }
 
-        bool operator!=(const Iter& other) const { return block != other.block || blockPos != other.blockPos; }
-        T& operator*() const { return *(T*)(block->DataStart() + blockPos); }
+        bool operator!=(const Iter& other) const {
+            return block != other.block || blockPos != other.blockPos;
+        }
+        T& operator*() const {
+            return *(T*)(block->DataStart() + blockPos);
+        }
         Iter& operator++() {
             blockPos += sizeof(T);
             if (block->Used() == blockPos) {
@@ -479,6 +522,29 @@ class PoolAllocator : public Allocator {
     }
 };
 
+#if OS_WIN
+class HeapAllocator : public Allocator {
+    HANDLE allocHeap = nullptr;
+
+  public:
+    HeapAllocator(size_t initialSize = 128 * 1024) {
+        allocHeap = HeapCreate(0, initialSize, 0);
+    }
+    ~HeapAllocator() override {
+        HeapDestroy(allocHeap);
+    }
+    void* Alloc(size_t size) override {
+        return HeapAlloc(allocHeap, 0, size);
+    }
+    void* Realloc(void* mem, size_t size) override {
+        return HeapReAlloc(allocHeap, 0, mem, size);
+    }
+    void Free(const void* mem) override {
+        HeapFree(allocHeap, 0, (void*)mem);
+    }
+};
+#endif
+
 // A helper for allocating an array of elements of type T
 // either on stack (if they fit within StackBufInBytes)
 // or in memory. Allocating on stack is a perf optimization
@@ -492,75 +558,47 @@ class FixedArray {
     explicit FixedArray(size_t elCount) {
         memBuf = nullptr;
         size_t stackEls = StackBufInBytes / sizeof(T);
-        if (elCount > stackEls)
+        if (elCount > stackEls) {
             memBuf = (T*)malloc(elCount * sizeof(T));
+        }
     }
 
-    ~FixedArray() { free(memBuf); }
+    ~FixedArray() {
+        free(memBuf);
+    }
 
     T* Get() {
-        if (memBuf)
+        if (memBuf) {
             return memBuf;
+        }
         return &(stackBuf[0]);
     }
 };
 
-// OwnedData is for returning data. It combines pointer to data and size.
-// It owns the data i.e. frees it in destructor.
-// It cannot be copied, only moved, so that it's clear that ownership of
-// data is being passed.
-class OwnedData {
-  public:
-    char* data = nullptr;
-    size_t size = 0;
+/*
+Poor-man's manual dynamic typing.
+Identity of an object is an address of a unique, global string.
+String is good for debugging
 
-    OwnedData() {}
-    // takes ownership of data
-    OwnedData(const char* data, size_t size = 0);
-    ~OwnedData();
+For classes / structs that we want to query for type at runtime, we add:
 
-    OwnedData(const OwnedData& other) = delete;
-    OwnedData& operator=(const OwnedData& other) = delete;
-
-    OwnedData& operator=(OwnedData&& other);
-    OwnedData(OwnedData&& other);
-
-    bool IsEmpty();
-    void Clear();
-    void TakeOwnership(const char* s, size_t size = 0);
-    char* StealData();
-    char* Get() const;
-    std::string_view AsView() const;
-
-    // creates a copy of s
-    static OwnedData MakeFromStr(const char* s, size_t size = 0);
+// in foo.h
+struct Foo {
+    Kind kind;
 };
 
-// MaybeOwnedData is for returning data that might be owned by this class.
-// It combines pointer to data and size.
-// It owns the data i.e. frees it in destructor.
-// It cannot be copied, only moved, so that it's clear that ownership of
-// data is being passed.
-class MaybeOwnedData {
-  public:
-    char* data = nullptr;
-    size_t size = 0;
-    bool isOwned = false;
+extern Kind kindFoo;
 
-    MaybeOwnedData(){};
-    MaybeOwnedData(char* data, size_t size, bool isOwned);
-    ~MaybeOwnedData();
+// in foo.cpp
+Kind kindFoo = "foo";
+*/
 
-    MaybeOwnedData(const MaybeOwnedData& other) = delete;
-    MaybeOwnedData& operator=(const MaybeOwnedData& other) = delete;
+typedef const char* Kind;
+inline bool isOfKindHelper(Kind k1, Kind k2) {
+    return k1 == k2;
+}
 
-    MaybeOwnedData& operator=(MaybeOwnedData&& other);
-    MaybeOwnedData(MaybeOwnedData&& other);
-
-    void Set(char* s, size_t len, bool isOwned);
-    void freeIfOwned();
-    OwnedData StealData();
-};
+#define IsOfKind(o, wantedKind) (o && isOfKindHelper(o->kind, wantedKind))
 
 // from https://pastebin.com/3YvWQa5c
 // In my testing, in debug build defer { } creates somewhat bloated code
@@ -571,8 +609,11 @@ class MaybeOwnedData {
 template <typename T>
 struct ExitScope {
     T lambda;
-    ExitScope(T lambda) : lambda(lambda) {}
-    ~ExitScope() { lambda(); }
+    ExitScope(T lambda) : lambda(lambda) {
+    }
+    ~ExitScope() {
+        lambda();
+    }
     ExitScope(const ExitScope&);
 
   private:
@@ -597,25 +638,13 @@ defer { instance->Release(); };
 
 #include "GeomUtil.h"
 #include "StrUtil.h"
+#include "StrconvUtil.h"
 #include "Scoped.h"
 #include "Vec.h"
+#include "StringViewUtil.h"
+#include "ColorUtil.h"
 
-#if OS_WIN
-/* In debug mode, VS 2010 instrumentations complains about GetRValue() etc.
-This adds equivalent functions that don't have this problem and ugly
-substitutions to make sure we don't use Get*Value() in the future */
-BYTE GetRValueSafe(COLORREF rgb);
-BYTE GetGValueSafe(COLORREF rgb);
-BYTE GetBValueSafe(COLORREF rgb);
-
-#undef GetRValue
-#define GetRValue UseGetRValueSafeInstead
-#undef GetGValue
-#define GetGValue UseGetGValueSafeInstead
-#undef GetBValue
-#define GetBValue UseGetBValueSafeInstead
-#endif
-
+// lstrcpy is dangerous so forbid using it
 #ifdef lstrcpy
 #undef lstrcpy
 #define lstrcpy dont_use_lstrcpy

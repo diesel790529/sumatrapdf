@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #ifndef NO_LIBMUPDF
@@ -7,8 +7,8 @@ extern "C" {
 }
 #endif
 
-#include "BaseUtil.h"
-#include "CryptoUtil.h"
+#include "utils/BaseUtil.h"
+#include "utils/CryptoUtil.h"
 
 #ifndef DWORD_MAX
 #define DWORD_MAX 0xffffffffUL
@@ -198,7 +198,7 @@ static bool ExtractSignature(const char* hexSignature, const void* data, size_t&
     } else
         return false;
 
-    str::Str<BYTE> signatureBytes;
+    Vec<BYTE> signatureBytes;
     for (const char* c = hexSignature; *c && !str::IsWs(*c); c += 2) {
         int val;
         if (1 != sscanf_s(c, "%02x", &val))

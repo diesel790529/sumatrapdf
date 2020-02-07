@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -7,13 +7,15 @@
 #include "utils/ScopedWin.h"
 #include "utils/Dpi.h"
 #include "utils/WinUtil.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
+#include "GlobalPrefs.h"
 #include "ChmModel.h"
 #include "DisplayModel.h"
-#include "GlobalPrefs.h"
 #include "TextSelection.h"
 #include "ProgressUpdateUI.h"
 #include "Notifications.h"
@@ -88,7 +90,7 @@ void DeleteOldSelectionInfo(WindowInfo* win, bool alsoTextSel) {
         win->AsFixed()->textSelection->Reset();
 }
 
-void PaintTransparentRectangles(HDC hdc, RectI screenRc, Vec<RectI>& rects, COLORREF selectionColor, BYTE alpha,
+void PaintTransparentRectangles(HDC hdc, RectI screenRc, Vec<RectI>& rects, COLORREF selectionColor, u8 alpha,
                                 int margin) {
     using namespace Gdiplus;
 
@@ -103,7 +105,9 @@ void PaintTransparentRectangles(HDC hdc, RectI screenRc, Vec<RectI>& rects, COLO
 
     // fill path (and draw optional outline margin)
     Graphics gs(hdc);
-    Color c(alpha, GetRValueSafe(selectionColor), GetGValueSafe(selectionColor), GetBValueSafe(selectionColor));
+    u8 r, g, b;
+    UnpackRgb(selectionColor, r, g, b);
+    Gdiplus::Color c(alpha, r, g, b);
     SolidBrush tmpBrush(c);
     gs.FillPath(&tmpBrush, &path);
     if (margin) {
@@ -178,6 +182,10 @@ void UpdateTextSelection(WindowInfo* win, bool select) {
 }
 
 void ZoomToSelection(WindowInfo* win, float factor, bool scrollToFit, bool relative) {
+    if (!win->IsDocLoaded()) {
+        return;
+    }
+
     PointI pt;
     bool zoomToPt = false;
 
@@ -242,7 +250,7 @@ void CopySelectionToClipboard(WindowInfo* win) {
     else
 #endif
         if (!dm->GetEngine()->IsImageCollection()) {
-        AutoFreeW selText;
+        AutoFreeWstr selText;
         bool isTextSelection = dm->textSelection->result.len > 0;
         if (isTextSelection) {
             selText.Set(dm->textSelection->ExtractText(L"\r\n"));
@@ -250,15 +258,17 @@ void CopySelectionToClipboard(WindowInfo* win) {
             WStrVec selections;
             for (SelectionOnPage& sel : *win->currentTab->selectionOnPage) {
                 WCHAR* text = dm->GetTextInRegion(sel.pageNo, sel.rect);
-                if (text)
+                if (text) {
                     selections.Push(text);
+                }
             }
             selText.Set(selections.Join());
         }
 
         // don't copy empty text
-        if (!str::IsEmpty(selText.Get()))
+        if (!str::IsEmpty(selText.Get())) {
             CopyTextToClipboard(selText, true);
+        }
 
         if (isTextSelection) {
             // don't also copy the first line of a text selection as an image
@@ -269,18 +279,22 @@ void CopySelectionToClipboard(WindowInfo* win) {
 
     /* also copy a screenshot of the current selection to the clipboard */
     SelectionOnPage* selOnPage = &win->currentTab->selectionOnPage->at(0);
-    RenderedBitmap* bmp = dm->GetEngine()->RenderBitmap(selOnPage->pageNo, dm->GetZoomReal(), dm->GetRotation(),
-                                                        &selOnPage->rect, RenderTarget::Export);
-    if (bmp)
+    float zoom = dm->GetZoomReal(selOnPage->pageNo);
+    int rotation = dm->GetRotation();
+    RenderPageArgs args(selOnPage->pageNo, zoom, rotation, &selOnPage->rect, RenderTarget::Export);
+    RenderedBitmap* bmp = dm->GetEngine()->RenderPage(args);
+    if (bmp) {
         CopyImageToClipboard(bmp->GetBitmap(), true);
+    }
     delete bmp;
 
     CloseClipboard();
 }
 
 void OnSelectAll(WindowInfo* win, bool textOnly) {
-    if (!HasPermission(Perm_CopySelection))
+    if (!HasPermission(Perm_CopySelection)) {
         return;
+    }
 
     if (IsFocused(win->hwndFindBox) || IsFocused(win->hwndPageBox)) {
         Edit_SelectAll(GetFocus());
@@ -315,8 +329,8 @@ void OnSelectAll(WindowInfo* win, bool textOnly) {
     win->RepaintAsync();
 }
 
-#define SELECT_AUTOSCROLL_AREA_WIDTH DpiScaleX(win->hwndFrame, 15)
-#define SELECT_AUTOSCROLL_STEP_LENGTH DpiScaleY(win->hwndFrame, 10)
+#define SELECT_AUTOSCROLL_AREA_WIDTH DpiScale(win->hwndFrame, 15)
+#define SELECT_AUTOSCROLL_STEP_LENGTH DpiScale(win->hwndFrame, 10)
 
 bool NeedsSelectionEdgeAutoscroll(WindowInfo* win, int x, int y) {
     return x < SELECT_AUTOSCROLL_AREA_WIDTH || x > win->canvasRc.dx - SELECT_AUTOSCROLL_AREA_WIDTH ||

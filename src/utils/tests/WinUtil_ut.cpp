@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
@@ -13,22 +13,23 @@ void WinUtilTest() {
 
     {
         char* string = "abcde";
-        size_t stringSize = 5, len;
-        ScopedComPtr<IStream> stream(CreateStreamFromData(string, stringSize));
+        size_t stringSize = 5;
+        auto strm = CreateStreamFromData({string, stringSize});
+        ScopedComPtr<IStream> stream(strm);
         utassert(stream);
-        char* data = (char*)GetDataFromStream(stream, &len);
-        utassert(data && stringSize == len && str::Eq(data, string));
-        free(data);
+        AutoFree data = GetDataFromStream(stream, nullptr);
+        utassert(data.data && stringSize == data.size() && str::Eq(data.data, string));
     }
 
     {
         WCHAR* string = L"abcde";
-        size_t stringSize = 10, len;
-        ScopedComPtr<IStream> stream(CreateStreamFromData(string, stringSize));
+        size_t stringSize = 10;
+        auto strm = CreateStreamFromData({(char*)string, stringSize});
+        ScopedComPtr<IStream> stream(strm);
         utassert(stream);
-        WCHAR* data = (WCHAR*)GetDataFromStream(stream, &len);
-        utassert(data && stringSize == len && str::Eq(data, string));
-        free(data);
+        AutoFree dataTmp = GetDataFromStream(stream, nullptr);
+        WCHAR* data = (WCHAR*)dataTmp.data;
+        utassert(data && stringSize == dataTmp.size() && str::Eq(data, string));
     }
 
     {

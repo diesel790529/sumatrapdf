@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -6,8 +6,9 @@
 #include "utils/HtmlParserLookup.h"
 #include "mui/Mui.h"
 #include "utils/WinUtil.h"
-// ui
 #include "SumatraPDF.h"
+
+#include "SumatraConfig.h"
 #include "resource.h"
 #include "SumatraAbout2.h"
 #include "Translations.h"
@@ -23,7 +24,7 @@ layout logic */
 #define TABLE_BORDER_WIDTH 2.f
 
 #define VERSION_TXT L"v" CURR_VERSION_STR
-#ifdef SVN_PRE_RELEASE_VER
+#ifdef PRE_RELEASE_VER
 #define VERSION_SUB_TXT L"Pre-release"
 #else
 #define VERSION_SUB_TXT L""
@@ -106,7 +107,7 @@ struct AboutLayoutInfoEl {
 };
 
 // TODO: replace this link with a better one where license information is nicely collected/linked
-#if defined(SVN_PRE_RELEASE_VER) || defined(DEBUG)
+#if defined(PRE_RELEASE_VER) || defined(DEBUG)
 #define URL_LICENSE L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/AUTHORS"
 #define URL_AUTHORS L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/AUTHORS"
 #define URL_TRANSLATORS L"https://github.com/sumatrapdfreader/sumatrapdf/blob/master/TRANSLATORS"
@@ -123,7 +124,7 @@ static AboutLayoutInfoEl gAboutLayoutInfo[] = {
     {L"programming", L"The Programmers", URL_AUTHORS},
     {L"translations", L"The Translators", URL_TRANSLATORS},
     {L"licenses", L"Various Open Source", URL_LICENSE},
-#ifdef SVN_PRE_RELEASE_VER
+#ifdef PRE_RELEASE_VER
     {L"a note", L"Pre-release version, for testing only!", nullptr},
 #endif
 #ifdef DEBUG
@@ -143,8 +144,10 @@ static COLORREF gSumatraLogoCols[] = {COL1, COL2, COL3, COL4, COL5, COL5, COL4, 
 
 class SumatraLogo : public Control {
   public:
-    SumatraLogo() {}
-    virtual ~SumatraLogo() {}
+    SumatraLogo() {
+    }
+    virtual ~SumatraLogo() {
+    }
     virtual Size Measure(const Size availableSize);
     virtual void Paint(Graphics* gfx, int offX, int offY);
 };
@@ -273,8 +276,8 @@ static void DestroyAboutMuiWindow() {
 
 static void CopyAboutInfoToClipboard(HWND hwnd) {
     UNUSED(hwnd);
-    str::Str<WCHAR> info(512);
-    info.AppendFmt(L"%s %s\r\n", APP_NAME_STR, VERSION_TXT);
+    str::WStr info(512);
+    info.AppendFmt(L"%s %s\r\n", getAppName(), VERSION_TXT);
     for (size_t i = info.size() - 2; i > 0; i--) {
         info.Append('-');
     }
@@ -338,7 +341,8 @@ void OnMenuAbout2() {
 
     if (!gAboutWndAtom) {
         FillWndClassEx(wcex, WND_CLASS_ABOUT2, WndProcAbout2);
-        wcex.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_SUMATRAPDF));
+        HMODULE h = GetModuleHandleW(nullptr);
+        wcex.hIcon = LoadIcon(h, MAKEINTRESOURCE(getAppIconID()));
         gAboutWndAtom = RegisterClassEx(&wcex);
         CrashIf(!gAboutWndAtom);
     }

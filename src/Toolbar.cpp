@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -6,12 +6,14 @@
 #include "utils/WinDynCalls.h"
 #include "utils/Dpi.h"
 #include "utils/WinUtil.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
 #include "DisplayModel.h"
-#include "Colors.h"
+#include "AppColors.h"
 #include "GlobalPrefs.h"
 #include "ProgressUpdateUI.h"
 #include "TextSelection.h"
@@ -211,7 +213,7 @@ void UpdateFindbox(WindowInfo* win) {
 }
 
 static HBITMAP LoadExternalBitmap(HINSTANCE hInst, WCHAR* fileName, INT resourceId, bool useDibSection) {
-    AutoFreeW path(AppGenDataFilename(fileName));
+    AutoFreeWstr path(AppGenDataFilename(fileName));
 
     UINT flags = useDibSection ? LR_CREATEDIBSECTION : 0;
     if (path) {
@@ -371,8 +373,8 @@ void UpdateToolbarState(WindowInfo* win) {
 #define FIND_BOX_WIDTH 160
 
 static void CreateFindBox(WindowInfo* win) {
-    int boxWidth = DpiScaleX(win->hwndFrame, FIND_BOX_WIDTH);
-    int minIconSize = DpiScaleX(win->hwndFrame, TOOLBAR_MIN_ICON_SIZE);
+    int boxWidth = DpiScale(win->hwndFrame, FIND_BOX_WIDTH);
+    int minIconSize = DpiScale(win->hwndFrame, TOOLBAR_MIN_ICON_SIZE);
     HWND findBg = CreateWindowEx(WS_EX_STATICEDGE, WC_STATIC, L"", WS_VISIBLE | WS_CHILD, 0, 1, boxWidth,
                                  minIconSize + 4, win->hwndToolbar, (HMENU)0, GetModuleHandle(nullptr), nullptr);
 
@@ -413,7 +415,7 @@ static LRESULT CALLBACK WndProcPageBox(HWND hwnd, UINT message, WPARAM wParam, L
     } else if (WM_CHAR == message) {
         switch (wParam) {
             case VK_RETURN: {
-                AutoFreeW buf(win::GetText(win->hwndPageBox));
+                AutoFreeWstr buf(win::GetText(win->hwndPageBox));
                 int newPageNo = win->ctrl->GetPageByLabel(buf);
                 if (win->ctrl->ValidPageNo(newPageNo)) {
                     win->ctrl->GoToPage(newPageNo, true);
@@ -476,7 +478,7 @@ void UpdateToolbarPageText(WindowInfo* win, int pageCount, bool updateOnly) {
         buf = str::Format(L" / %d", pageCount);
     else {
         buf = str::Format(L" (%d / %d)", win->ctrl->CurrentPageNo(), pageCount);
-        AutoFreeW buf2(str::Format(L" (%d / %d)", pageCount, pageCount));
+        AutoFreeWstr buf2(str::Format(L" (%d / %d)", pageCount, pageCount));
         size2 = TextSizeInHwnd(win->hwndPageTotal, buf2);
     }
 
@@ -521,8 +523,8 @@ void UpdateToolbarPageText(WindowInfo* win, int pageCount, bool updateOnly) {
 static void CreatePageBox(WindowInfo* win) {
     auto hwndFrame = win->hwndFrame;
     auto hwndToolbar = win->hwndToolbar;
-    int boxWidth = DpiScaleX(hwndFrame, PAGE_BOX_WIDTH);
-    int minIconSize = DpiScaleX(hwndFrame, TOOLBAR_MIN_ICON_SIZE);
+    int boxWidth = DpiScale(hwndFrame, PAGE_BOX_WIDTH);
+    int minIconSize = DpiScale(hwndFrame, TOOLBAR_MIN_ICON_SIZE);
     DWORD style = WS_VISIBLE | WS_CHILD;
     auto h = GetModuleHandle(nullptr);
     HWND pageBg = CreateWindowEx(WS_EX_STATICEDGE, WC_STATIC, L"", style, 0, 1, boxWidth, minIconSize + 4, hwndToolbar,
@@ -595,10 +597,10 @@ void CreateToolbar(WindowInfo* win) {
     // stretch the toolbar bitmaps for higher DPI settings
     // TODO: get nicely interpolated versions of the toolbar icons for higher resolutions
 
-    Dpi* dpi = DpiGet(win->hwndFrame);
+    int dpi = DpiGet(win->hwndFrame);
     // scale toolbar images only by integral sizes (2, 3 etc.)
-    int scaleX = (int)ceilf((float)dpi->dpiX / 96.f);
-    int scaleY = (int)ceilf((float)dpi->dpiY / 96.f);
+    int scaleX = (int)ceilf((float)dpi / 96.f);
+    int scaleY = (int)ceilf((float)dpi / 96.f);
     bool needsScaling = (scaleX > 1) || (scaleY > 1);
 
     bool useDibSection = UseDibSection(needsScaling);

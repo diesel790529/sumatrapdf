@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -196,12 +196,12 @@ SquareTree::SquareTree(const char* data) : root(nullptr) {
     if (str::StartsWith(data, UTF8_BOM)) {
         dataUtf8.SetCopy(data + 3);
     } else if (str::StartsWith(data, UTF16_BOM)) {
-        auto tmp = str::conv::ToUtf8((const WCHAR*)(data + 2));
-        dataUtf8.Set(tmp.StealData());
+        auto tmp = strconv::WstrToUtf8((const WCHAR*)(data + 2));
+        dataUtf8.Set(tmp.data());
     } else if (data) {
-        AutoFreeW tmp(str::conv::FromAnsi(data));
-        auto tmp2 = str::conv::ToUtf8(tmp.Get());
-        dataUtf8.Set(tmp2.StealData());
+        AutoFreeWstr tmp(strconv::FromAnsi(data));
+        auto tmp2 = strconv::WstrToUtf8(tmp.Get());
+        dataUtf8.Set(tmp2.data());
     }
     if (!dataUtf8) {
         return;

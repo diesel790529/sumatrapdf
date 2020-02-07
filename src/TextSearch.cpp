@@ -1,9 +1,11 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "ProgressUpdateUI.h"
 #include "TextSelection.h"
 #include "TextSearch.h"
@@ -18,7 +20,7 @@ static void markAllPagesNonSkip(std::vector<bool>& pagesToSkip) {
         pagesToSkip[i] = false;
     }
 }
-TextSearch::TextSearch(BaseEngine* engine, PageTextCache* textCache) : TextSelection(engine, textCache) {
+TextSearch::TextSearch(EngineBase* engine, PageTextCache* textCache) : TextSelection(engine, textCache) {
     nPages = engine->PageCount();
     pagesToSkip.resize(nPages);
     markAllPagesNonSkip(pagesToSkip);
@@ -102,7 +104,7 @@ void TextSearch::SetDirection(TextSearchDirection direction) {
 void TextSearch::SetLastResult(TextSelection* sel) {
     CopySelection(sel);
 
-    AutoFreeW selection(ExtractText(L" "));
+    AutoFreeWstr selection(ExtractText(L" "));
     str::NormalizeWS(selection);
     SetText(selection);
 

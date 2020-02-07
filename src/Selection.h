@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #define SMOOTHSCROLL_TIMER_ID 2
@@ -7,7 +7,8 @@
 
 /* Represents selected area on given page */
 struct SelectionOnPage {
-    explicit SelectionOnPage(int pageNo = 0, RectD* rect = nullptr) : pageNo(pageNo), rect(rect ? *rect : RectD()) {}
+    explicit SelectionOnPage(int pageNo = 0, RectD* rect = nullptr) : pageNo(pageNo), rect(rect ? *rect : RectD()) {
+    }
 
     int pageNo; // page this selection is on
     RectD rect; // position of selection rectangle on page (in page coordinates)

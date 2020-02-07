@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #define SERIALIZE_ESCAPE_CHAR '$'
@@ -23,7 +23,7 @@ struct TxtNode {
     char* keyStart;
     char* keyEnd;
 
-    explicit TxtNode(TxtNode::Type tp) { type = tp; }
+    explicit TxtNode(TxtNode::Type tp);
     TxtNode(const TxtNode& other) = delete;
     TxtNode& operator=(const TxtNode& other) = delete;
 
@@ -65,7 +65,7 @@ struct Token {
 
 struct TxtParser {
     PoolAllocator allocator;
-    OwnedData data;
+    AutoFree data;
 
     str::Slice toParse;
     Token tok;
@@ -80,4 +80,4 @@ struct TxtParser {
 };
 
 bool ParseTxt(TxtParser& parser);
-OwnedData PrettyPrintTxt(const TxtParser& parser);
+str::Str PrettyPrintTxt(const TxtParser& parser);

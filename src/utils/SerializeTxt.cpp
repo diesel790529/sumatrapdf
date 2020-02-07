@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -186,7 +186,8 @@ class DecodeState {
   public:
     // data being decoded
     TxtParser parser;
-    DecodeState() {}
+    DecodeState() {
+    }
 };
 
 static bool ParseUInt(char* s, char* e, uint64_t* nOut) {
@@ -452,7 +453,7 @@ static bool DecodeField(DecodeState& ds, TxtNode* firstNode, const char* fieldNa
         size_t sLen = node->valEnd - s;
         if (s && (sLen > 0)) {
             // note: we don't free ws because it's remembered in structDataPtr
-            WCHAR* ws = str::conv::FromUtf8(s);
+            WCHAR* ws = strconv::Utf8ToWstr(s);
             WriteStructWStr(structDataPtr, ws);
         }
         return true;
@@ -526,14 +527,14 @@ uint8_t* Deserialize(const std::string_view str, const StructMetadata* def) {
     return DeserializeRec(ds, ds.parser.nodes.at(0), def);
 }
 
-static void AppendNest(str::Str<char>& s, int nest) {
+static void AppendNest(str::Str& s, int nest) {
     while (nest > 0) {
         s.Append("  ");
         --nest;
     }
 }
 
-static void AppendVal(const char* val, char escapeChar, bool compact, str::Str<char>& res) {
+static void AppendVal(const char* val, char escapeChar, bool compact, str::Str& res) {
     const char* start = val;
     const char* s = start;
     char escaped = 0;
@@ -554,19 +555,20 @@ static void AppendVal(const char* val, char escapeChar, bool compact, str::Str<c
 
         size_t len = s - start - 1;
         res.Append(start, len);
-        res.Append(escapeChar);
-        res.Append(escaped);
+        res.AppendChar(escapeChar);
+        res.AppendChar(escaped);
         start = s;
         escaped = 0;
     }
     size_t len = s - start;
     res.Append(start, len);
-    if (!compact)
+    if (!compact) {
         res.Append(NL);
+    }
 }
 
 struct EncodeState {
-    str::Str<char> res;
+    str::Str res;
 
     char escapeChar;
 
@@ -598,8 +600,8 @@ void SerializeRec(EncodeState& es, const uint8_t* structStart, const StructMetad
 
 static void SerializeField(EncodeState& es, const char* fieldName, const FieldMetadata* fieldDef,
                            const uint8_t* structStart) {
-    str::Str<char> val;
-    str::Str<char>& res = es.res;
+    str::Str val;
+    str::Str& res = es.res;
 
     Type type = fieldDef->type;
     if ((type & TYPE_NO_STORE_MASK) != 0)
@@ -648,7 +650,7 @@ static void SerializeField(EncodeState& es, const char* fieldName, const FieldMe
     } else if (TYPE_WSTR == type) {
         WCHAR* s = (WCHAR*)ReadStructPtr(data);
         if (s) {
-            OwnedData val2(str::conv::ToUtf8(s));
+            AutoFree val2(strconv::WstrToUtf8(s));
             AppendKeyVal(es, fieldName, val2.Get());
         }
     } else if (TYPE_STRUCT_PTR == type) {
@@ -706,7 +708,7 @@ void SerializeRec(EncodeState& es, const uint8_t* structStart, const StructMetad
     }
 }
 
-OwnedData Serialize(const uint8_t* rootStruct, const StructMetadata* def) {
+std::string_view Serialize(const uint8_t* rootStruct, const StructMetadata* def) {
     EncodeState es;
     es.res.Append(UTF8_BOM "; see https://www.sumatrapdfreader.org/settings.html for documentation" NL);
     es.nest = 0;

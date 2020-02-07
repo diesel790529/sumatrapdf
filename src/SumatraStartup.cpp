@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -10,15 +10,26 @@
 #include "utils/FileUtil.h"
 #include "utils/FileWatcher.h"
 #include "utils/HtmlParserLookup.h"
-#include "wingui/LabelWithCloseWnd.h"
 #include "mui/Mui.h"
-#include "wingui/SplitterWnd.h"
 #include "utils/SquareTreeParser.h"
 #include "utils/ThreadUtil.h"
 #include "utils/UITask.h"
 #include "utils/WinUtil.h"
-#include "utils/DebugLog.h"
-#include "BaseEngine.h"
+#include "utils/Archive.h"
+#include "utils/LzmaSimpleArchive.h"
+#include "utils/Log.h"
+
+#include "SumatraConfig.h"
+
+#include "wingui/WinGui.h"
+#include "wingui/Layout.h"
+#include "wingui/Window.h"
+//#include "wingui/TooltipCtrl.h"
+#include "wingui/SplitterWnd.h"
+#include "wingui/LabelWithCloseWnd.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
@@ -35,7 +46,7 @@
 #include "WindowInfo.h"
 #include "TabInfo.h"
 #include "resource.h"
-#include "ParseCommandLine.h"
+#include "Flags.h"
 #include "AppPrefs.h"
 #include "AppTools.h"
 #include "Canvas.h"
@@ -54,19 +65,16 @@
 #include "Version.h"
 #include "Tests.h"
 #include "Menu.h"
-#include "utils/Archive.h"
 #include "AppTools.h"
+#include "Installer.h"
+#include "SumatraConfig.h"
 
-#define CRASH_DUMP_FILE_NAME L"sumatrapdfcrash.dmp"
-
-#ifdef DEBUG
 static bool TryLoadMemTrace() {
-    AutoFreeW dllPath(path::GetPathOfFileInAppDir(L"memtrace.dll"));
+    AutoFreeWstr dllPath(path::GetPathOfFileInAppDir(L"memtrace.dll"));
     if (!LoadLibrary(dllPath))
         return false;
     return true;
 }
-#endif
 
 // gFileExistenceChecker is initialized at startup and should
 // terminate and delete itself asynchronously while the UI is
@@ -79,7 +87,9 @@ class FileExistenceChecker : public ThreadBase {
     void Terminate();
 
   public:
-    FileExistenceChecker() { GetFilePathsToCheck(); }
+    FileExistenceChecker() {
+        GetFilePathsToCheck();
+    }
     void Run() override;
 };
 
@@ -159,8 +169,10 @@ static bool RegisterWinClass() {
     WNDCLASSEX wcex;
     ATOM atom;
 
+    HMODULE h = GetModuleHandleW(nullptr);
+    LPCWSTR iconName = MAKEINTRESOURCEW(getAppIconID());
     FillWndClassEx(wcex, FRAME_CLASS_NAME, WndProcFrame);
-    wcex.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_SUMATRAPDF));
+    wcex.hIcon = LoadIconW(h, iconName);
     CrashIf(!wcex.hIcon);
     // For the extended translucent frame to be visible, we need black background.
     wcex.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
@@ -173,7 +185,7 @@ static bool RegisterWinClass() {
     CrashIf(!atom);
 
     FillWndClassEx(wcex, PROPERTIES_CLASS_NAME, WndProcProperties);
-    wcex.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_SUMATRAPDF));
+    wcex.hIcon = LoadIconW(h, iconName);
     CrashIf(!wcex.hIcon);
     atom = RegisterClassEx(&wcex);
     CrashIf(!atom);
@@ -191,17 +203,17 @@ static bool InstanceInit() {
     return true;
 }
 
-static void OpenUsingDde(HWND targetWnd, const WCHAR* filePath, CommandLineInfo& i, bool isFirstWin) {
+static void OpenUsingDde(HWND targetWnd, const WCHAR* filePath, Flags& i, bool isFirstWin) {
     // delegate file opening to a previously running instance by sending a DDE message
     WCHAR fullpath[MAX_PATH];
     GetFullPathName(filePath, dimof(fullpath), fullpath, nullptr);
 
-    str::Str<WCHAR> cmd;
-    cmd.AppendFmt(L"[" DDECOMMAND_OPEN L"(\"%s\", 0, 1, 0)]", fullpath);
+    str::WStr cmd;
+    cmd.AppendFmt(L"[Open(\"%s\", 0, 1, 0)]", fullpath);
     if (i.destName && isFirstWin) {
-        cmd.AppendFmt(L"[" DDECOMMAND_GOTO L"(\"%s\", \"%s\")]", fullpath, i.destName);
+        cmd.AppendFmt(L"[GotoNamedDest(\"%s\", \"%s\")]", fullpath, i.destName);
     } else if (i.pageNumber > 0 && isFirstWin) {
-        cmd.AppendFmt(L"[" DDECOMMAND_PAGE L"(\"%s\", %d)]", fullpath, i.pageNumber);
+        cmd.AppendFmt(L"[GotoPage(\"%s\", %d)]", fullpath, i.pageNumber);
     }
     if ((i.startView != DM_AUTOMATIC || i.startZoom != INVALID_ZOOM ||
          i.startScroll.x != -1 && i.startScroll.y != -1) &&
@@ -211,8 +223,8 @@ static void OpenUsingDde(HWND targetWnd, const WCHAR* filePath, CommandLineInfo&
                       i.startScroll.x, i.startScroll.y);
     }
     if (i.forwardSearchOrigin && i.forwardSearchLine) {
-        AutoFreeW sourcePath(path::Normalize(i.forwardSearchOrigin));
-        cmd.AppendFmt(L"[" DDECOMMAND_SYNC L"(\"%s\", \"%s\", %d, 0, 0, 1)]", fullpath, sourcePath,
+        AutoFreeWstr sourcePath(path::Normalize(i.forwardSearchOrigin));
+        cmd.AppendFmt(L"[" DDECOMMAND_SYNC L"(\"%s\", \"%s\", %d, 0, 0, 1)]", fullpath, sourcePath.get(),
                       i.forwardSearchLine);
     }
 
@@ -220,39 +232,47 @@ static void OpenUsingDde(HWND targetWnd, const WCHAR* filePath, CommandLineInfo&
         // try WM_COPYDATA first, as that allows targetting a specific window
         COPYDATASTRUCT cds = {0x44646557 /* DdeW */, (DWORD)(cmd.size() + 1) * sizeof(WCHAR), cmd.Get()};
         LRESULT res = SendMessage(targetWnd, WM_COPYDATA, 0, (LPARAM)&cds);
-        if (res)
+        if (res) {
             return;
+        }
     }
     DDEExecute(PDFSYNC_DDE_SERVICE, PDFSYNC_DDE_TOPIC, cmd.Get());
 }
 
-static WindowInfo* LoadOnStartup(const WCHAR* filePath, CommandLineInfo& i, bool isFirstWin) {
-    LoadArgs args(filePath);
+static WindowInfo* LoadOnStartup(const WCHAR* filePath, const Flags& i, bool isFirstWin) {
+    LoadArgs args(filePath, nullptr);
     args.showWin = !(i.printDialog && i.exitWhenDone) && !gPluginMode;
     WindowInfo* win = LoadDocument(args);
-    if (!win)
+    if (!win) {
         return win;
+    }
 
     if (win->IsDocLoaded() && i.destName && isFirstWin) {
         win->linkHandler->GotoNamedDest(i.destName);
     } else if (win->IsDocLoaded() && i.pageNumber > 0 && isFirstWin) {
-        if (win->ctrl->ValidPageNo(i.pageNumber))
+        if (win->ctrl->ValidPageNo(i.pageNumber)) {
             win->ctrl->GoToPage(i.pageNumber, false);
+        }
     }
-    if (i.hwndPluginParent)
+    if (i.hwndPluginParent) {
         MakePluginWindow(win, i.hwndPluginParent);
-    if (!win->IsDocLoaded() || !isFirstWin)
+    }
+    if (!win->IsDocLoaded() || !isFirstWin) {
         return win;
+    }
 
     if (i.enterPresentation || i.enterFullScreen) {
-        if (i.enterPresentation && win->isFullScreen || i.enterFullScreen && win->presentation)
+        if (i.enterPresentation && win->isFullScreen || i.enterFullScreen && win->presentation) {
             ExitFullScreen(win);
+        }
         EnterFullScreen(win, i.enterPresentation);
     }
-    if (i.startView != DM_AUTOMATIC)
+    if (i.startView != DM_AUTOMATIC) {
         SwitchToDisplayMode(win, i.startView);
-    if (i.startZoom != INVALID_ZOOM)
+    }
+    if (i.startZoom != INVALID_ZOOM) {
         ZoomToSelection(win, i.startZoom);
+    }
     if ((i.startScroll.x != -1 || i.startScroll.y != -1) && win->AsFixed()) {
         DisplayModel* dm = win->AsFixed();
         ScrollState ss = dm->GetScrollState();
@@ -263,7 +283,7 @@ static WindowInfo* LoadOnStartup(const WCHAR* filePath, CommandLineInfo& i, bool
     if (i.forwardSearchOrigin && i.forwardSearchLine && win->AsFixed() && win->AsFixed()->pdfSync) {
         UINT page;
         Vec<RectI> rects;
-        AutoFreeW sourcePath(path::Normalize(i.forwardSearchOrigin));
+        AutoFreeWstr sourcePath(path::Normalize(i.forwardSearchOrigin));
         int ret = win->AsFixed()->pdfSync->SourceToDoc(sourcePath, i.forwardSearchLine, 0, &page, rects);
         ShowForwardSearchResult(win, sourcePath, i.forwardSearchLine, 0, ret, page, rects);
     }
@@ -272,39 +292,47 @@ static WindowInfo* LoadOnStartup(const WCHAR* filePath, CommandLineInfo& i, bool
 
 static void RestoreTabOnStartup(WindowInfo* win, TabState* state) {
     LoadArgs args(state->filePath, win);
-    if (!LoadDocument(args))
+    if (!LoadDocument(args)) {
         return;
+    }
     TabInfo* tab = win->currentTab;
-    if (!tab || !tab->ctrl)
+    if (!tab || !tab->ctrl) {
         return;
+    }
 
     tab->tocState = *state->tocState;
     SetSidebarVisibility(win, state->showToc, gGlobalPrefs->showFavorites);
 
     DisplayMode displayMode = prefs::conv::ToDisplayMode(state->displayMode, DM_AUTOMATIC);
-    if (displayMode != DM_AUTOMATIC)
+    if (displayMode != DM_AUTOMATIC) {
         SwitchToDisplayMode(win, displayMode);
+    }
     // TODO: make EbookController::GoToPage not crash
-    if (!tab->AsEbook())
+    if (!tab->AsEbook()) {
         tab->ctrl->GoToPage(state->pageNo, true);
+    }
     float zoom = prefs::conv::ToZoom(state->zoom, INVALID_ZOOM);
     if (zoom != INVALID_ZOOM) {
-        if (tab->AsFixed())
+        if (tab->AsFixed()) {
             tab->AsFixed()->Relayout(zoom, state->rotation);
-        else
+        } else {
             tab->ctrl->SetZoomVirtual(zoom, nullptr);
+        }
     }
-    if (tab->AsFixed())
+    if (tab->AsFixed()) {
         tab->AsFixed()->SetScrollState(ScrollState(state->pageNo, state->scrollPos.x, state->scrollPos.y));
+    }
 }
 
-static bool SetupPluginMode(CommandLineInfo& i) {
-    if (!IsWindow(i.hwndPluginParent) || i.fileNames.size() == 0)
+static bool SetupPluginMode(Flags& i) {
+    if (!IsWindow(i.hwndPluginParent) || i.fileNames.size() == 0) {
         return false;
+    }
 
     gPluginURL = i.pluginURL;
-    if (!gPluginURL)
+    if (!gPluginURL) {
         gPluginURL = i.fileNames.at(0);
+    }
 
     AssertCrash(i.fileNames.size() == 1);
     while (i.fileNames.size() > 1) {
@@ -341,7 +369,7 @@ static bool SetupPluginMode(CommandLineInfo& i) {
     // extract some command line arguments from the URL's hash fragment where available
     // see http://www.adobe.com/devnet/acrobat/pdfs/pdf_open_parameters.pdf#nameddest=G4.1501531
     if (i.pluginURL && str::FindChar(i.pluginURL, '#')) {
-        AutoFreeW args(str::Dup(str::FindChar(i.pluginURL, '#') + 1));
+        AutoFreeWstr args(str::Dup(str::FindChar(i.pluginURL, '#') + 1));
         str::TransChars(args, L"#", L"&");
         WStrVec parts;
         parts.Split(args, L"&", true);
@@ -351,44 +379,46 @@ static bool SetupPluginMode(CommandLineInfo& i) {
             if (str::StartsWithI(part, L"page=") && str::Parse(part + 4, L"=%d%$", &pageNo))
                 i.pageNumber = pageNo;
             else if (str::StartsWithI(part, L"nameddest=") && part[10])
-                i.destName.SetCopy(part + 10);
+                i.destName = str::Dup(part + 10);
             else if (!str::FindChar(part, '=') && part[0])
-                i.destName.SetCopy(part);
+                i.destName = str::Dup(part);
         }
     }
-
     return true;
 }
 
 static void SetupCrashHandler() {
-    AutoFreeW symDir;
-    AutoFreeW tmpDir(path::GetTempPath());
-    if (tmpDir)
-        symDir.Set(path::Join(tmpDir, L"SumatraPDF-symbols"));
-    else
-        symDir.Set(AppGenDataFilename(L"SumatraPDF-symbols"));
-    AutoFreeW crashDumpPath(AppGenDataFilename(CRASH_DUMP_FILE_NAME));
-    InstallCrashHandler(crashDumpPath, symDir);
+    WCHAR* symDir = AppGenDataFilename(L"crashinfo");
+    WCHAR* crashDumpPath = path::Join(symDir, L"sumatrapdfcrash.dmp");
+    WCHAR* crashFilePath = path::Join(symDir, L"sumatrapdfcrash.txt");
+    InstallCrashHandler(crashDumpPath, crashFilePath, symDir);
+    free(crashFilePath);
+    free(crashDumpPath);
+    free(symDir);
 }
 
 static HWND FindPrevInstWindow(HANDLE* hMutex) {
     // create a unique identifier for this executable
     // (allows independent side-by-side installations)
-    AutoFreeW exePath(GetExePath());
+    AutoFreeWstr exePath = GetExePath();
     str::ToLowerInPlace(exePath);
-    uint32_t hash = MurmurHash2(exePath.Get(), str::Len(exePath) * sizeof(WCHAR));
-    AutoFreeW mapId(str::Format(L"SumatraPDF-%08x", hash));
+    uint32_t hash = MurmurHash2(exePath, str::Len(exePath) * sizeof(WCHAR));
+    AutoFreeWstr mapId = str::Format(L"SumatraPDF-%08x", hash);
 
     int retriesLeft = 3;
+    HANDLE hMap = nullptr;
 Retry:
     // use a memory mapping containing a process id as mutex
-    HANDLE hMap = CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(DWORD), mapId);
-    if (!hMap)
+    hMap = CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(DWORD), mapId);
+    if (!hMap) {
         goto Error;
-    bool hasPrevInst = GetLastError() == ERROR_ALREADY_EXISTS;
+    }
+    DWORD lastErr = GetLastError();
+    bool hasPrevInst = (lastErr == ERROR_ALREADY_EXISTS);
     DWORD* procId = (DWORD*)MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(DWORD));
     if (!procId) {
         CloseHandle(hMap);
+        hMap = nullptr;
         goto Error;
     }
     if (!hasPrevInst) {
@@ -414,13 +444,15 @@ Retry:
 
     // fall through
 Error:
-    if (--retriesLeft < 0)
+    if (--retriesLeft < 0) {
         return nullptr;
+    }
     Sleep(100);
     goto Retry;
 }
 
-extern "C" void fz_redirect_dll_io_to_console();
+// TODO(port)
+// extern "C" void fz_redirect_dll_io_to_console();
 
 // Registering happens either through the Installer or the Options dialog;
 // here we just make sure that we're still registered
@@ -453,8 +485,9 @@ static int RunMessageLoop() {
         // dispatch the accelerator to the correct window
         WindowInfo* win = FindWindowInfoByHwnd(msg.hwnd);
         HWND accHwnd = win ? win->hwndFrame : msg.hwnd;
-        if (TranslateAccelerator(accHwnd, accTable, &msg))
+        if (TranslateAccelerator(accHwnd, accTable, &msg)) {
             continue;
+        }
 
         TranslateMessage(&msg);
         DispatchMessage(&msg);
@@ -482,11 +515,11 @@ static bool AutoUpdateMain() {
     }
     if (str::Eq(argList.at(2), L"replace")) {
         // older 2.6 prerelease versions used implicit paths
-        AutoFreeW exePath(GetExePath());
+        AutoFreeWstr exePath(GetExePath());
         CrashIf(!str::EndsWith(exePath, L".exe-updater.exe"));
         exePath[str::Len(exePath) - 12] = '\0';
         free(argList.at(2));
-        argList.at(2) = str::Format(L"replace:%s", exePath);
+        argList.at(2) = str::Format(L"replace:%s", exePath.get());
     }
     const WCHAR* otherExe = nullptr;
     if (str::StartsWith(argList.at(2), L"replace:"))
@@ -502,10 +535,10 @@ static bool AutoUpdateMain() {
         // continue startup, restoring the previous session
         return false;
     }
-    AutoFreeW thisExe(GetExePath());
+    AutoFreeWstr thisExe(GetExePath());
     RetryIO([&] { return CopyFile(thisExe, otherExe, FALSE) != 0; });
     // TODO: somehow indicate success or failure
-    AutoFreeW cleanupArgs(str::Format(L"-autoupdate cleanup:\"%s\"", thisExe));
+    AutoFreeWstr cleanupArgs(str::Format(L"-autoupdate cleanup:\"%s\"", thisExe.get()));
     RetryIO([&] { return LaunchFile(otherExe, cleanupArgs); });
     return true;
 }
@@ -520,15 +553,209 @@ static void ShutdownCommon() {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 }
 
-// TODO: this will expand to extract everything
-static void ExtractUnrar() {
-    const WCHAR* path = ExractUnrarDll();
-    if (path == nullptr) {
+static void UpdateGlobalPrefs(const Flags& i) {
+    if (i.inverseSearchCmdLine) {
+        str::ReplacePtr(&gGlobalPrefs->inverseSearchCmdLine, i.inverseSearchCmdLine);
+        gGlobalPrefs->enableTeXEnhancements = true;
+    }
+    gGlobalPrefs->fixedPageUI.invertColors = i.invertColors;
+
+    for (size_t n = 0; n < i.globalPrefArgs.size(); n++) {
+        if (str::EqI(i.globalPrefArgs.at(n), L"-esc-to-exit")) {
+            gGlobalPrefs->escToExit = true;
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-bgcolor") || str::EqI(i.globalPrefArgs.at(n), L"-bg-color")) {
+            // -bgcolor is for backwards compat (was used pre-1.3)
+            // -bg-color is for consistency
+            ParseColor(&gGlobalPrefs->mainWindowBackground, i.globalPrefArgs.at(++n));
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-set-color-range")) {
+            ParseColor(&gGlobalPrefs->fixedPageUI.textColor, i.globalPrefArgs.at(++n));
+            ParseColor(&gGlobalPrefs->fixedPageUI.backgroundColor, i.globalPrefArgs.at(++n));
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-fwdsearch-offset")) {
+            gGlobalPrefs->forwardSearch.highlightOffset = _wtoi(i.globalPrefArgs.at(++n));
+            gGlobalPrefs->enableTeXEnhancements = true;
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-fwdsearch-width")) {
+            gGlobalPrefs->forwardSearch.highlightWidth = _wtoi(i.globalPrefArgs.at(++n));
+            gGlobalPrefs->enableTeXEnhancements = true;
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-fwdsearch-color")) {
+            ParseColor(&gGlobalPrefs->forwardSearch.highlightColor, i.globalPrefArgs.at(++n));
+            gGlobalPrefs->enableTeXEnhancements = true;
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-fwdsearch-permanent")) {
+            gGlobalPrefs->forwardSearch.highlightPermanent = _wtoi(i.globalPrefArgs.at(++n));
+            gGlobalPrefs->enableTeXEnhancements = true;
+        } else if (str::EqI(i.globalPrefArgs.at(n), L"-manga-mode")) {
+            const WCHAR* s = i.globalPrefArgs.at(++n);
+            gGlobalPrefs->comicBookUI.cbxMangaMode = str::EqI(L"true", s) || str::Eq(L"1", s);
+        }
+    }
+}
+
+static bool ExeHasNameOfRaMicro() {
+    AutoFreeWstr exePath = GetExePath();
+    const WCHAR* exeName = path::GetBaseNameNoFree(exePath);
+    return str::FindI(exeName, L"ramicro");
+}
+
+// we're in installer mode if the name of the executable
+// has "install" string in it e.g. SumatraPDF-installer.exe
+static bool ExeHasNameOfInstaller() {
+    AutoFreeWstr exePath = GetExePath();
+    const WCHAR* exeName = path::GetBaseNameNoFree(exePath);
+    return str::FindI(exeName, L"install");
+}
+
+static bool ExeHasInstallerResources() {
+    HRSRC resSrc = FindResource(GetModuleHandle(nullptr), MAKEINTRESOURCEW(1), RT_RCDATA);
+    return resSrc != nullptr;
+}
+
+static bool IsInstallerAndNamedAsSuch() {
+    if (!ExeHasInstallerResources()) {
+        return false;
+    }
+    return ExeHasNameOfInstaller();
+}
+
+// if we can load "libmupdf.dll" this is likely an installed executable
+static bool SeemsInstalled() {
+    HMODULE h = LoadLibraryW(L"libmupdf.dll");
+    return h != nullptr;
+}
+
+static bool IsInstallerButNotInstalled() {
+    if (!ExeHasInstallerResources()) {
+        return false;
+    }
+    if (ExeHasNameOfInstaller()) {
+        return true;
+    }
+    if (SeemsInstalled()) {
+        return false;
+    }
+    return true;
+}
+
+// I see people trying to use installer as a portable
+// version. This crashes because it can't load
+// libmupdf.dll. We try to detect that case and show an error message instead.
+// TODO: I still see crashes due to delay loading of libmupdf.dll
+static void EnsureNotInstaller() {
+    if (IsInstallerButNotInstalled()) {
+        MessageBoxA(nullptr,
+                    "This is a SumatraPDF installer.\nEither install it with -install option or use portable "
+                    "version.\nDownload portable from https://www.sumatrapdfreader.org\n",
+                    "Error", MB_OK);
+        ::ExitProcess(1);
+    }
+}
+
+// TODO: autoupdate, was it ever working?
+// [/autoupdate]
+//     /autoupdate\tperforms an update with visible UI and minimal user interaction.
+
+static void ShowInstallerHelp() {
+    // Note: translation services aren't initialized at this point, so English only
+    const WCHAR* appName = getAppName();
+
+    AutoFreeWstr msg = str::Format(
+        L"%s installer options:\n\
+    [/s][/d <path>][/with-filter][/with-preview][/x]\n\
+    \n\
+    /s\tinstalls %s silently (without user interaction).\n\
+    /d\tchanges the directory where %s will be installed.\n\
+    /with-filter\tinstall search filter\n\
+    /with-preview\tinstall shell preview\n\
+    /x\tjust extracts the files contained within the installer.\n\
+",
+        appName, appName, appName);
+    AutoFreeWstr caption = str::Join(appName, L" Installer Usage");
+    MessageBoxW(nullptr, msg, caption, MB_OK);
+}
+
+// in Installer.cpp
+extern int RunInstaller(Flags*);
+extern void ShowInstallerHelp();
+// in Uninstaller.cpp
+extern int RunUninstaller(Flags*);
+
+// In release builds, we want to do fast exit and leave cleaning up (freeing memory) to the os.
+// In debug and in release asan builds, we want to cleanup ourselves in order to see leaks.
+// Note: detect_leaks ASAN flag is not (yet?) supported with msvc 16.4
+#if defined(DEBUG) || defined(ASAN_BUILD)
+static bool fastExit = false;
+#else
+static bool fastExit = true;
+#endif
+
+static void stdNewHandler() {
+    // do nothing
+    // this suppresses throw std::bad_alloc done by default hanlder
+}
+
+// even though we compile without exceptions, new throws std::bad_alloc and we don't want that
+static void supressThrowFromNew() {
+    std::set_new_handler(stdNewHandler);
+}
+
+static void ShowNotValidInstallerError() {
+    MessageBoxW(nullptr, L"Not a valid installer", L"Error", MB_OK | MB_ICONERROR);
+}
+
+// in Installer.cpp
+extern bool ExtractFiles(lzma::SimpleArchive* archive, const WCHAR* destDir);
+extern bool CopySelfToDir(const WCHAR* destDir);
+
+static void ExtractInstallerFiles() {
+    auto [data, size, res] = LockDataResource(1);
+    if (data == nullptr) {
+        ShowNotValidInstallerError();
         return;
     }
-    SetUnrarDllPath(path);
-    str::Free(path);
+
+    lzma::SimpleArchive archive = {};
+    bool ok = lzma::ParseSimpleArchive(data, size, &archive);
+    if (!ok) {
+        ShowNotValidInstallerError();
+        return;
+    }
+    AutoFreeWstr dir = GetExeDir();
+    if (ExtractFiles(&archive, dir.data)) {
+        CopySelfToDir(dir);
+    }
 }
+
+#if 0
+static void LogDpiAwareness() {
+    if (!DynGetThreadDpiAwarenessContext) {
+        return;
+    }
+    auto awc = DynGetThreadDpiAwarenessContext();
+    auto aw = DynGetAwarenessFromDpiAwarenessContext(awc);
+
+    char* aws = "unknown";
+    if (aw == DPI_AWARENESS_INVALID) {
+        aws = "DPI_AWARENESS_INVALID";
+    } else if (aw == DPI_AWARENESS_UNAWARE) {
+        aws = "DPI_AWARENESS_UNAWARE";
+    } else if (aw == DPI_AWARENESS_SYSTEM_AWARE) {
+        aws = "DPI_AWARENESS_SYSTEM_AWARE";
+    } else if (aw == DPI_AWARENESS_PER_MONITOR_AWARE) {
+        aws = "DPI_AWARENESS_PER_MONITOR_AWARE";
+    }
+
+    logf("aw: %d %s\n", (int)aw, aws);
+}
+#endif
+
+#if 0
+static void testLogf() {
+    const char* fileName = path::GetBaseNameNoFree(__FILE__);
+    WCHAR* gswin32c = L"this is a path";
+    WCHAR* tmpFile = L"c:\foo\bar.txt";
+    AutoFree gswin = strconv::WstrToUtf8(gswin32c);
+    AutoFree tmpFileName = strconv::WstrToUtf8(path::GetBaseNameNoFree(tmpFile));
+    logf("- %s:%d: using '%s' for creating '%%TEMP%%\\%s'\n", fileName, __LINE__, gswin.get(), tmpFileName.get());
+}
+#endif
 
 int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR cmdLine,
                      _In_ int nCmdShow) {
@@ -539,14 +766,17 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     CrashIf(hInstance != GetInstance());
 
-#ifdef DEBUG
-    // Memory leak detection (only enable _CRTDBG_LEAK_CHECK_DF for
-    // regular termination so that leaks aren't checked on exceptions,
-    // aborts, etc. where some clean-up might not take place)
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF);
-    //_CrtSetBreakAlloc(421);
-    TryLoadMemTrace();
-#endif
+    if (gIsDebugBuild) {
+        // Memory leak detection (only enable _CRTDBG_LEAK_CHECK_DF for
+        // regular termination so that leaks aren't checked on exceptions,
+        // aborts, etc. where some clean-up might not take place)
+        _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF);
+        //_CrtSetDbgFlag(_CRTDBG_CHECK_ALWAYS_DF);
+        //_CrtSetBreakAlloc(421);
+        TryLoadMemTrace();
+    }
+
+    supressThrowFromNew();
 
     InitDynCalls();
     NoDllHijacking();
@@ -560,17 +790,81 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     // without a cd).
     SetErrorMode(SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS);
 
-#if defined(DEBUG) || defined(SVN_PRE_RELEASE_VER)
-    if (str::StartsWith(cmdLine, "/tester")) {
-        extern int TesterMain(); // in Tester.cpp
-        return TesterMain();
+    srand((unsigned int)time(nullptr));
+
+    if (!gIsAsanBuild) {
+        SetupCrashHandler();
     }
 
-    if (str::StartsWith(cmdLine, "/regress")) {
-        extern int RegressMain(); // in Regress.cpp
-        return RegressMain();
+    ScopedOle ole;
+    InitAllCommonControls();
+    ScopedGdiPlus gdiPlus(true);
+    mui::Initialize();
+    uitask::Initialize();
+
+    // logToFile("C:\\Users\\kjk\\Downloads\\sumlog.txt");
+
+    if (gIsDebugBuild) {
+        logToDebugger = true;
     }
-#endif
+
+    log("Starting SumatraPDF\n");
+
+    // testLogf();
+
+    // LogDpiAwareness();
+
+    // TODO: temporary, to test crash reporting
+    // gAddCrashMeMenu = true;
+
+    logf(L"CmdLine: %s\n", GetCommandLineW());
+    Flags i;
+    ParseCommandLine(GetCommandLineW(), i);
+
+    if (gIsDebugBuild || gIsPreReleaseBuild) {
+        if (i.tester) {
+            extern int TesterMain(); // in Tester.cpp
+            return TesterMain();
+        }
+        if (i.regress) {
+            extern int RegressMain(); // in Regress.cpp
+            return RegressMain();
+        }
+    }
+
+    if (i.ramicro) {
+        gIsRaMicroBuild = true;
+    }
+    if (ExeHasNameOfRaMicro()) {
+        gIsRaMicroBuild = true;
+    }
+
+    if (i.showHelp && IsInstallerButNotInstalled()) {
+        ShowInstallerHelp();
+        return 0;
+    }
+
+    if (i.justExtractFiles) {
+        ExtractInstallerFiles();
+        ::ExitProcess(0);
+    }
+
+    if ((i.install || i.justExtractFiles) || IsInstallerAndNamedAsSuch()) {
+        if (!ExeHasInstallerResources()) {
+            ShowNotValidInstallerError();
+            return 1;
+        }
+        retCode = RunInstaller(&i);
+        // exit immediately. for some reason exit handlers try to
+        // pull in libmupdf.dll which we don't have access to in the installer
+        ::ExitProcess(retCode);
+    }
+
+    if (i.uninstall) {
+        retCode = RunUninstaller(&i);
+        ::ExitProcess(retCode);
+    }
+
 #if defined(SUPPORTS_AUTO_UPDATE) || defined(DEBUG)
     if (str::StartsWith(cmdLine, "-autoupdate")) {
         bool quit = AutoUpdateMain();
@@ -579,23 +873,7 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     }
 #endif
 
-    srand((unsigned int)time(nullptr));
-
-#ifdef DEBUG
-    dbghelp::RememberCallstackLogs();
-#endif
-
-    SetupCrashHandler();
-    ExtractUnrar();
-
-    ScopedOle ole;
-    InitAllCommonControls();
-    ScopedGdiPlus gdiPlus(true);
-    mui::Initialize();
-    uitask::Initialize();
-
-    CommandLineInfo i;
-    i.ParseCommandLine(GetCommandLine());
+    EnsureNotInstaller();
 
     if (i.testRenderPage) {
         TestRenderPage(i);
@@ -610,11 +888,12 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     }
 
     InitializePolicies(i.restrictedUse);
-    if (i.appdataDir)
+    if (i.appdataDir) {
         SetAppDataPath(i.appdataDir);
+    }
 
     prefs::Load();
-    prefs::UpdateGlobalPrefs(i);
+    UpdateGlobalPrefs(i);
     SetCurrentLang(i.lang ? i.lang : gGlobalPrefs->uiLanguage);
 
     // This allows ad-hoc comparison of gdi, gdi+ and gdi+ quick when used
@@ -628,31 +907,49 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     if (i.showConsole) {
         RedirectIOToConsole();
-        fz_redirect_dll_io_to_console();
+        // TODO(port)
+        // fz_redirect_dll_io_to_console();
     }
-    if (i.makeDefault)
+
+    if (i.testApp) {
+        // in TestApp.cpp
+        extern void TestApp(HINSTANCE hInstance);
+        TestApp(hInstance);
+        return 0;
+    }
+
+    if (i.registerAsDefault) {
         AssociateExeWithPdfExtension();
+    }
+
     if (i.pathsToBenchmark.size() > 0) {
         BenchFileOrDir(i.pathsToBenchmark);
         if (i.showConsole)
             system("pause");
     }
-    if (i.exitImmediately)
+
+    if (i.exitImmediately) {
         goto Exit;
+    }
+
     gCrashOnOpen = i.crashOnOpen;
 
     GetFixedPageUiColors(gRenderCache.textColor, gRenderCache.backgroundColor);
 
-    if (!RegisterWinClass())
+    gIsStartup = true;
+    if (!RegisterWinClass()) {
         goto Exit;
+    }
 
     CrashIf(hInstance != GetModuleHandle(nullptr));
-    if (!InstanceInit())
+    if (!InstanceInit()) {
         goto Exit;
+    }
 
     if (i.hwndPluginParent) {
-        if (!SetupPluginMode(i))
+        if (!SetupPluginMode(i)) {
             goto Exit;
+        }
     }
 
     if (i.printerName) {
@@ -702,10 +999,15 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     bool showStartPage =
         !restoreSession && i.fileNames.size() == 0 && gGlobalPrefs->rememberOpenedFiles && gGlobalPrefs->showStartPage;
-    if (showStartPage) {
-        // make the shell prepare the image list, so that it's ready when the first window's loaded
-        SHFILEINFO sfi = {0};
-        SHGetFileInfo(L".pdf", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+
+    // ShGetFileInfoW triggers ASAN deep in Windows code so probably not my fault
+    if (!gIsAsanBuild) {
+        if (showStartPage) {
+            // make the shell prepare the image list, so that it's ready when the first window's loaded
+            SHFILEINFOW sfi = {0};
+            UINT flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES;
+            SHGetFileInfoW(L".pdf", 0, &sfi, sizeof(sfi), flags);
+        }
     }
 
     WindowInfo* win = nullptr;
@@ -720,48 +1022,76 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     }
     ResetSessionState(gGlobalPrefs->sessionData);
     // prevent the same session from being restored twice
-    if (restoreSession && !(gGlobalPrefs->reuseInstance || gGlobalPrefs->useTabs))
+    if (restoreSession && !(gGlobalPrefs->reuseInstance || gGlobalPrefs->useTabs)) {
         prefs::Save();
+    }
 
     for (const WCHAR* filePath : i.fileNames) {
-        if (restoreSession && FindWindowInfoByFile(filePath, true))
+        if (restoreSession && FindWindowInfoByFile(filePath, false)) {
             continue;
+        }
+        AutoFree path = strconv::WstrToUtf8(filePath);
         win = LoadOnStartup(filePath, i, !win);
         if (!win) {
             retCode++;
             continue;
         }
-        if (i.printDialog)
+        if (i.printDialog) {
             OnMenuPrint(win, i.exitWhenDone);
+        }
     }
+
+    int nWithDde = (int)gDdeOpenOnStartup.size();
+    if (nWithDde > 0) {
+        logf("Loading %d documents queued by dde open\n", nWithDde);
+        for (auto&& filePath : gDdeOpenOnStartup) {
+            if (restoreSession && FindWindowInfoByFile(filePath, false)) {
+                continue;
+            }
+            AutoFree path = strconv::WstrToUtf8(filePath);
+            win = LoadOnStartup(filePath, i, !win);
+            if (!win) {
+                retCode++;
+            }
+        }
+        gDdeOpenOnStartup.Reset();
+    }
+
+    gIsStartup = false;
+
     if (i.fileNames.size() > 0 && !win) {
         // failed to create any window, even though there
         // were files to load (or show a failure message for)
         goto Exit;
     }
-    if (i.printDialog && i.exitWhenDone)
+    if (i.printDialog && i.exitWhenDone) {
         goto Exit;
+    }
 
     if (!win) {
         win = CreateAndShowWindowInfo();
-        if (!win)
+        if (!win) {
             goto Exit;
+        }
     }
 
     // Make sure that we're still registered as default,
     // if the user has explicitly told us to be
-    if (gGlobalPrefs->associatedExtensions)
+    if (gGlobalPrefs->associatedExtensions) {
         RegisterForPdfExtentions(win->hwndFrame);
+    }
 
     if (i.stressTestPath) {
         // don't save file history and preference changes
         RestrictPolicies(Perm_SavePreferences);
         RebuildMenuBarForWindow(win);
         StartStressTest(&i, win);
+        fastExit = true;
     }
 
-    if (gGlobalPrefs->checkForUpdates)
+    if (gGlobalPrefs->checkForUpdates) {
         UpdateCheckAsync(win, true);
+    }
 
     // only hide newly missing files when showing the start page on startup
     if (showStartPage && gFileHistory.Get(0)) {
@@ -791,22 +1121,22 @@ int APIENTRY WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 Exit:
     prefs::UnregisterForFileChanges();
 
+    if (fastExit) {
+        // leave all the remaining clean-up to the OS
+        // (as recommended for a quick exit)
+        ::ExitProcess(retCode);
+    }
+
     while (gWindows.size() > 0) {
         DeleteWindowInfo(gWindows.at(0));
     }
 
-#ifndef DEBUG
-
-    // leave all the remaining clean-up to the OS
-    // (as recommended for a quick exit)
-    ExitProcess(retCode);
-
-#else
-
     DeleteCachedCursors();
     DeleteObject(GetDefaultGuiFont());
     DeleteBitmap(gBitmapReloadingCue);
-    DeleteSplitterBrush();
+
+    extern void CleanupDjVuEngine(); // in EngineDjVu.cpp
+    CleanupDjVuEngine();
 
     // wait for FileExistenceChecker to terminate
     // (which should be necessary only very rarely)
@@ -818,7 +1148,6 @@ Exit:
     mui::Destroy();
     uitask::Destroy();
     trans::Destroy();
-    DpiRemoveAll();
 
     FileWatcherWaitForShutdown();
 
@@ -831,14 +1160,20 @@ Exit:
     prefs::CleanUp();
 
     FreeAllMenuDrawInfos();
+
     // it's still possible to crash after this (destructors of static classes,
     // atexit() code etc.) point, but it's very unlikely
-    UninstallCrashHandler();
+    if (!gIsAsanBuild) {
+        UninstallCrashHandler();
+    }
 
-    dbglog::FreeCrashLog();
-    // output leaks after all destructors of static objects have run
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    delete gLogBuf;
+    delete gLogAllocator;
+
+    if (gIsDebugBuild) {
+        // output leaks after all destructors of static objects have run
+        _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    }
 
     return retCode;
-#endif
 }

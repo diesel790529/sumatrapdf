@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 bool HasBeenInstalled();
@@ -16,5 +16,6 @@ bool ExtendedEditWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 void EnsureAreaVisibility(RectI& rect);
 RectI GetDefaultWindowPos();
 void SaveCallstackLogs();
+#if 0
 WCHAR* PathForFileInAppDataDir(const WCHAR* fileName);
-const WCHAR* ExractUnrarDll();
+#endif

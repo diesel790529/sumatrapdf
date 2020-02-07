@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 // SetWindowSubclass, RemoveWindowSubclass and DefSubclassProc require the WinXP SDK
@@ -38,8 +38,8 @@ static void FrameRatePaint(FrameRateWnd* w, HDC hdc, PAINTSTRUCT& ps) {
 
     SetTextColor(hdc, COL_WHITE);
 
-    ScopedHdcSelect selFont(hdc, w->font);
-    AutoFreeW txt(str::Format(L"%d", w->frameRate));
+    ScopedSelectObject selFont(hdc, w->font);
+    AutoFreeWstr txt(str::Format(L"%d", w->frameRate));
     DrawCenteredText(hdc, rc, txt);
 }
 

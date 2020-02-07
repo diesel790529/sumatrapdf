@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 enum HtmlParseError {
@@ -76,9 +76,13 @@ class HtmlParser {
     HtmlElement* Parse(const char* s, UINT codepage = CP_ACP);
     HtmlElement* ParseInPlace(char* s, UINT codepage = CP_ACP);
 
-    size_t ElementsCount() const { return elementsCount; }
+    size_t ElementsCount() const {
+        return elementsCount;
+    }
 
-    size_t TotalAttrCount() const { return attributesCount; }
+    size_t TotalAttrCount() const {
+        return attributesCount;
+    }
 
     HtmlElement* FindElementByName(const char* name, HtmlElement* from = nullptr);
     HtmlElement* FindElementByNameNS(const char* name, const char* ns, HtmlElement* from = nullptr);
@@ -86,13 +90,11 @@ class HtmlParser {
 
 WCHAR* DecodeHtmlEntitites(const char* string, UINT codepage);
 
-namespace str {
-namespace conv {
+namespace strconv {
 
 inline WCHAR* FromHtmlUtf8(const char* s, size_t len) {
     AutoFree tmp(str::DupN(s, len));
     return DecodeHtmlEntitites(tmp, CP_UTF8);
 }
 
-} // namespace conv
-} // namespace str
+} // namespace strconv

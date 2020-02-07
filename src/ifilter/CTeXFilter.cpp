@@ -1,4 +1,4 @@
-﻿/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+﻿/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -13,14 +13,13 @@ HRESULT CTeXFilter::OnInit()
     if (!m_pData) {
         // load content of LaTeX file into m_pData
         HRESULT res;
-        size_t len;
-        void *data = GetDataFromStream(m_pStream, &len, &res);
-        if (!data)
+        AutoFree data = GetDataFromStream(m_pStream, &res);
+        if (data.empty()) {
             return res;
+        }
 
-        m_pData = str::ToWideChar((char *)data, CP_ACP);
-        m_pBuffer = AllocArray<WCHAR>(len + 1);
-        free(data);
+        m_pData = strconv::ToWideChar(data.data, CP_ACP);
+        m_pBuffer = AllocArray<WCHAR>(data.size() + 1);
 
         if (!m_pData || !m_pBuffer) {
             CleanUp();

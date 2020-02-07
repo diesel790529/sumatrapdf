@@ -1,8 +1,8 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
-#include "BaseUtil.h"
-#include "ByteOrderDecoder.h"
+#include "utils/BaseUtil.h"
+#include "utils/ByteOrderDecoder.h"
 
 uint16_t UInt16BE(const u8* d) {
     return d[1] | (d[0] << 8);
@@ -21,10 +21,12 @@ uint32_t UInt32LE(const u8* d) {
 }
 
 ByteOrderDecoder::ByteOrderDecoder(const char* d, size_t len, ByteOrder order)
-    : ok(true), byteOrder(order), data((const u8*)d), curr(data), left(len) {}
+    : ok(true), byteOrder(order), data((const u8*)d), curr(data), left(len) {
+}
 
 ByteOrderDecoder::ByteOrderDecoder(const u8* d, size_t len, ByteOrder order)
-    : ok(true), byteOrder(order), data(d), curr(data), left(len) {}
+    : ok(true), byteOrder(order), data(d), curr(data), left(len) {
+}
 
 u8 ByteOrderDecoder::UInt8() {
     if (left < 1) {

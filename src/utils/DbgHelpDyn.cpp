@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD */
 
 /* Wrappers around dbghelp.dll that load it on demand and provide
@@ -7,11 +7,11 @@
    can be used from crash handler.
 */
 
-#include "BaseUtil.h"
-#include "WinDynCalls.h"
-#include "DbgHelpDyn.h"
-#include "FileUtil.h"
-#include "WinUtil.h"
+#include "utils/BaseUtil.h"
+#include "utils/WinDynCalls.h"
+#include "utils/DbgHelpDyn.h"
+#include "utils/FileUtil.h"
+#include "utils/WinUtil.h"
 
 /* Hard won wisdom: changing symbol path with SymSetSearchPath() after modules
    have been loaded (invideProcess=TRUE in SymInitialize() or SymRefreshModuleList())
@@ -70,20 +70,20 @@ static bool SetupSymbolPath()
         return false;
     }
 
-    AutoFreeW path(GetSymbolPath());
+    AutoFreeWstr path(GetSymbolPath());
     if (!path) {
         plog("SetupSymbolPath(): GetSymbolPath() returned nullptr");
         return false;
     }
 
     BOOL ok = FALSE;
-    AutoFreeW tpath(str::conv::FromWStr(path));
+    AutoFreeWstr tpath(strconv::FromWStr(path));
     if (DynSymSetSearchPathW) {
         ok = DynSymSetSearchPathW(GetCurrentProcess(), path);
         if (!ok)
             plog("DynSymSetSearchPathW() failed");
     } else {
-        AutoFree tmp(str::conv::ToAnsi(tpath));
+        AutoFree tmp(strconv::ToAnsi(tpath));
         ok = DynSymSetSearchPath(GetCurrentProcess(), tmp);
         if (!ok)
             plog("DynSymSetSearchPath() failed");
@@ -104,6 +104,7 @@ static bool CanStackWalk() {
     return ok;
 }
 
+// check if has access to valid .pdb symbols file by trying to resolve a symbol
 __declspec(noinline) bool CanSymbolizeAddress(DWORD64 addr) {
     static const int MAX_SYM_LEN = 512;
 
@@ -150,7 +151,7 @@ bool Initialize(const WCHAR* symPathW, bool force) {
     } else {
         // SymInitializeW() is not present on some XP systems
         char symPathA[MAX_PATH];
-        if (0 != str::conv::ToCodePageBuf(symPathA, dimof(symPathA), symPathW, CP_ACP))
+        if (0 != strconv::ToCodePageBuf(symPathA, dimof(symPathA), symPathW, CP_ACP))
             gSymInitializeOk = DynSymInitialize(GetCurrentProcess(), symPathA, TRUE);
     }
 
@@ -245,12 +246,12 @@ static bool GetAddrInfo(void* addr, char* module, DWORD moduleLen, DWORD& sectio
     return false;
 }
 
-static void AppendAddress(str::Str<char>& s, DWORD64 addr) {
+static void AppendAddress(str::Str& s, DWORD64 addr) {
     void* p = reinterpret_cast<void*>(addr);
     s.AppendFmt("%p", p);
 }
 
-static void GetAddressInfo(str::Str<char>& s, DWORD64 addr) {
+static void GetAddressInfo(str::Str& s, DWORD64 addr) {
     static const int MAX_SYM_LEN = 512;
 
     char buf[sizeof(SYMBOL_INFO) + MAX_SYM_LEN * sizeof(char)];
@@ -271,7 +272,7 @@ static void GetAddressInfo(str::Str<char>& s, DWORD64 addr) {
     DWORD_PTR offset;
     if (GetAddrInfo((void*)addr, module, sizeof(module), section, offset)) {
         str::ToLowerInPlace(module);
-        const char* moduleShort = path::GetBaseName(module);
+        const char* moduleShort = path::GetBaseNameNoFree(module);
         AppendAddress(s, addr);
         s.AppendFmt(" %02X:", section);
         AppendAddress(s, offset);
@@ -294,7 +295,7 @@ static void GetAddressInfo(str::Str<char>& s, DWORD64 addr) {
     s.Append("\r\n");
 }
 
-static bool GetStackFrameInfo(str::Str<char>& s, STACKFRAME64* stackFrame, CONTEXT* ctx, HANDLE hThread) {
+static bool GetStackFrameInfo(str::Str& s, STACKFRAME64* stackFrame, CONTEXT* ctx, HANDLE hThread) {
 #if defined(_WIN64)
     int machineType = IMAGE_FILE_MACHINE_AMD64;
 #else
@@ -317,7 +318,7 @@ static bool GetStackFrameInfo(str::Str<char>& s, STACKFRAME64* stackFrame, CONTE
     return true;
 }
 
-static bool GetCallstack(str::Str<char>& s, CONTEXT& ctx, HANDLE hThread) {
+static bool GetCallstack(str::Str& s, CONTEXT& ctx, HANDLE hThread) {
     if (!CanStackWalk()) {
         s.Append("GetCallstack(): CanStackWalk() returned false");
         return false;
@@ -352,7 +353,7 @@ static bool GetCallstack(str::Str<char>& s, CONTEXT& ctx, HANDLE hThread) {
     return true;
 }
 
-void GetThreadCallstack(str::Str<char>& s, DWORD threadId) {
+void GetThreadCallstack(str::Str& s, DWORD threadId) {
     if (threadId == GetCurrentThreadId())
         return;
 
@@ -391,7 +392,7 @@ void GetThreadCallstack(str::Str<char>& s, DWORD threadId) {
 // from local buffer overrun because optimizations are disabled in function)"
 #pragma warning(push)
 #pragma warning(disable : 4748)
-__declspec(noinline) bool GetCurrentThreadCallstack(str::Str<char>& s) {
+__declspec(noinline) bool GetCurrentThreadCallstack(str::Str& s) {
     // not available under Win2000
     if (!DynRtlCaptureContext)
         return false;
@@ -405,12 +406,12 @@ __declspec(noinline) bool GetCurrentThreadCallstack(str::Str<char>& s) {
 }
 #pragma optimize("", off)
 
-str::Str<char>* gCallstackLogs = nullptr;
+str::Str* gCallstackLogs = nullptr;
 
 // start remembering callstack logs done with LogCallstack()
 void RememberCallstackLogs() {
     CrashIf(gCallstackLogs);
-    gCallstackLogs = new str::Str<char>();
+    gCallstackLogs = new str::Str();
 }
 
 void FreeCallstackLogs() {
@@ -425,17 +426,18 @@ char* GetCallstacks() {
 }
 
 void LogCallstack() {
-    str::Str<char> s(2048);
-    if (!GetCurrentThreadCallstack(s))
+    str::Str s(2048);
+    if (!GetCurrentThreadCallstack(s)) {
         return;
+    }
 
     s.Append("\n");
-    plog(s.Get());
-    if (gCallstackLogs)
+    if (gCallstackLogs) {
         gCallstackLogs->Append(s.Get());
+    }
 }
 
-void GetAllThreadsCallstacks(str::Str<char>& s) {
+void GetAllThreadsCallstacks(str::Str& s) {
     HANDLE threadSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (threadSnap == INVALID_HANDLE_VALUE)
         return;
@@ -455,7 +457,7 @@ void GetAllThreadsCallstacks(str::Str<char>& s) {
 }
 #pragma warning(pop)
 
-void GetExceptionInfo(str::Str<char>& s, EXCEPTION_POINTERS* excPointers) {
+void GetExceptionInfo(str::Str& s, EXCEPTION_POINTERS* excPointers) {
     if (!excPointers)
         return;
     EXCEPTION_RECORD* excRecord = excPointers->ExceptionRecord;

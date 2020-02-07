@@ -1,8 +1,9 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/BitManip.h"
+#include "utils/GdiPlusUtil.h"
 #include "utils/HtmlParserLookup.h"
 #include "mui/Mui.h"
 #include "utils/SerializeTxt.h"
@@ -20,8 +21,6 @@
 #include "EbookControls.h"
 #include "MuiEbookPageDef.h"
 #include "PagesLayoutDef.h"
-#define NOLOG 1
-#include "utils/DebugLog.h"
 
 constexpr const char ebookWinDesc[] = R"data(
 Style [
@@ -174,7 +173,7 @@ void PageControl::NotifyMouseMove(int x, int y) {
     }
 
     SetCursor(IDC_HAND);
-    AutoFreeW url(str::conv::FromHtmlUtf8(link->str.s, link->str.len));
+    AutoFreeWstr url(strconv::FromHtmlUtf8(link->str.s, link->str.len));
     if (toolTip && (!url::IsAbsolute(url) || !str::Eq(toolTip, url))) {
         Control::NotifyMouseLeave();
         str::ReplacePtr(&toolTip, nullptr);
@@ -200,16 +199,16 @@ Size PageControl::GetDrawableSize() const {
 void PageControl::Paint(Graphics* gfx, int offX, int offY) {
     CrashIf(!IsVisible());
 
-    Timer timerAll;
+    auto timerAll = TimeGet();
 
     CachedStyle* s = cachedStyle;
-    Timer timerFill;
+    auto timerFill = TimeGet();
     Rect r(offX, offY, pos.Width, pos.Height);
     if (!s->bgColor->IsTransparent()) {
         Brush* br = BrushFromColorData(s->bgColor, r);
         gfx->FillRectangle(br, r);
     }
-    double durFill = timerFill.Stop();
+    double durFill = TimeSinceInMs(timerFill);
 
     if (!page)
         return;
@@ -236,14 +235,14 @@ void PageControl::Paint(Graphics* gfx, int offX, int offY) {
     bgColor.SetFromCOLORREF(bgCol);
     textRender->SetTextBgColor(bgColor);
 
-    Timer timerDrawHtml;
+    auto timerDrawHtml = TimeGet();
     DrawHtmlPage(gfx, textRender, &page->instructions, (REAL)r.X, (REAL)r.Y, IsDebugPaint(), textColor);
-    double durDraw = timerDrawHtml.Stop();
+    double durDraw = TimeSinceInMs(timerDrawHtml);
     gfx->SetClip(&origClipRegion, CombineModeReplace);
     delete textRender;
 
-    double durAll = timerAll.Stop();
-    lf("all: %.2f, fill: %.2f, draw html: %.2f", durAll, durFill, durDraw);
+    double durAll = TimeSinceInMs(timerAll);
+    // logf("all: %.2f, fill: %.2f, draw html: %.2f\n", durAll, durFill, durDraw);
 }
 
 Control* CreatePageControl(TxtNode* structDef) {
@@ -280,13 +279,13 @@ void SetMainWndBgCol(EbookControls* ctrls) {
 
     Style* styleMainWnd = StyleByName("styleMainWnd");
     CrashIf(!styleMainWnd);
-    styleMainWnd->Set(
-        Prop::AllocColorSolid(PropBgColor, GetRValueSafe(bgColor), GetGValueSafe(bgColor), GetBValueSafe(bgColor)));
+    u8 r, g, b;
+    UnpackRgb(bgColor, r, g, b);
+    styleMainWnd->Set(Prop::AllocColorSolid(PropBgColor, r, g, b));
     ctrls->mainWnd->SetStyle(styleMainWnd);
 
     Style* styleStatus = StyleByName("styleStatus");
-    styleStatus->Set(
-        Prop::AllocColorSolid(PropBgColor, GetRValueSafe(bgColor), GetGValueSafe(bgColor), GetBValueSafe(bgColor)));
+    styleStatus->Set(Prop::AllocColorSolid(PropBgColor, r, g, b));
     ctrls->status->SetStyle(styleStatus);
 
     // TODO: should also allow to change text color

@@ -57,6 +57,7 @@ About SumatraPDF
 Add Favorite
 Add page %s to favorites
 Add page %s to favorites with (optional) name:
+Add page %s to favorites\tCtrl+B
 Add to favorites
 Advanced
 All files
@@ -69,7 +70,6 @@ Author:
 Automatic
 Automatically check for &updates
 Book View
-Book&marks\tF12
 Bookmark Shortcuts
 Bookmark shortcut to page %s of %s
 Bookmarks
@@ -82,6 +82,7 @@ Cannot start inverse search command. Please check the command line in the settin
 Change Language
 Check for &Updates
 Close
+Collapse All
 Comic books
 Compatibility
 Continuous
@@ -94,14 +95,11 @@ Copy Co&mment
 Copying text was denied (copying as image only)
 Copyright:
 Could not obtain Printer properties
-Couldn't create temporary directory
 Couldn't create the installation directory
 Couldn't initialize printer
 Couldn't install PDF previewer
 Couldn't install PDF search filter
-Couldn't obtain temporary directory
 Couldn't remove installation directory
-Couldn't remove the shortcut
 Couldn't render the page
 Couldn't uninstall PDF previewer
 Couldn't uninstall PDF search filter
@@ -126,12 +124,11 @@ Enter password
 Enter password for %s
 Enter the command-line to invoke when you double-click on the PDF document:
 Error loading %s
+Expand All
 F&avorites
 F&orward\tAlt+Right Arrow
 F&ullscreen\tF11
 Facing
-Failed to copy uninstaller to temp directory
-Failed to create a shortcut
 Failed to delete uninstaller registry keys
 Failed to register as default program on win 10
 Failed to rename the file!
@@ -173,7 +170,6 @@ Install SumatraPDF in &folder:
 Installation failed!
 Installation in progress...
 KB
-Keep the PDF &browser plugin installed (no longer supported)
 Let Windows Desktop Search &search PDF documents
 Let Windows show &previews of PDF documents
 Light
@@ -184,6 +180,7 @@ Man&ga Mode
 Match Case
 Mobi documents
 Modified:
+New &window\tCtrl+N
 New version %s is available. Download new version?
 Next Page
 No matches were found
@@ -234,6 +231,7 @@ Remove page %s from favorites
 Rename To
 Rotate &Left\tCtrl+Shift+-
 Rotate &Right\tCtrl+Shift++
+Save Annotations
 Save As
 Save S&hortcut...\tCtrl+Shift+S
 Searching %d of %d...
@@ -244,14 +242,16 @@ Select the folder where SumatraPDF should be installed:
 Selection:
 Send by &E-mail...
 Set inverse search command-line
-Show &Bookmarks
+Show &Bookmarks\tF12
+Show &Favorites
 Show &Pages Continuously
 Show &Toolbar\tF8
+Show Book&marks\tF12
 Show Favorites
 Show frequently read
+Show in &folder
 Show the &bookmarks sidebar when available
 Single Page
-Some files to be installed are damaged or missing
 Sorry, that shouldn't have happened!\n\nPlease press 'Cancel', if you want to help us fix the cause of this crash.
 Source file %s has no synchronization point
 Start SumatraPDF

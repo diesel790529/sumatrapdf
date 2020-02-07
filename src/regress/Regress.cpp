@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 /*
@@ -26,7 +26,9 @@ To write new regression test:
 #include "utils/HtmlParserLookup.h"
 #include "mui/Mui.h"
 #include "utils/WinUtil.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "EbookDoc.h"
 #include "HtmlFormatter.h"
@@ -103,7 +105,7 @@ static DWORD WINAPI CrashDumpThread(LPVOID data) {
         return 0;
     }
 
-    str::Str<char> s(16 * 1024);
+    str::Str s(16 * 1024);
     dbghelp::GetExceptionInfo(s, gMei.ExceptionPointers);
     dbghelp::GetAllThreadsCallstacks(s);
     s.Append("\r\n");

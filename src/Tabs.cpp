@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -9,13 +9,19 @@
 #include "utils/GdiPlusUtil.h"
 #include "utils/UITask.h"
 #include "utils/WinUtil.h"
+#include "utils/Log.h"
+
+#include "wingui/WinGui.h"
+#include "wingui/Layout.h"
+#include "wingui/Window.h"
+#include "wingui/TreeModel.h"
 #include "wingui/TreeCtrl.h"
 
-#include "BaseEngine.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
-#include "Colors.h"
+#include "AppColors.h"
 #include "GlobalPrefs.h"
 #include "ProgressUpdateUI.h"
 #include "Notifications.h"
@@ -28,6 +34,8 @@
 #include "TableOfContents.h"
 #include "Tabs.h"
 
+using namespace Gdiplus;
+
 #define DEFAULT_CURRENT_BG_COL (COLORREF) - 1
 
 #define T_CLOSING (TCN_LAST + 1)
@@ -38,18 +46,14 @@
 #define MIN_TAB_WIDTH 100
 
 int GetTabbarHeight(HWND hwnd, float factor) {
-    int dy = DpiScaleY(hwnd, TABBAR_HEIGHT);
+    int dy = DpiScale(hwnd, TABBAR_HEIGHT);
     return (int)(dy * factor);
 }
 
 static inline SizeI GetTabSize(HWND hwnd) {
-    int dx = DpiScaleX(hwnd, std::max(gGlobalPrefs->prereleaseSettings.tabWidth, MIN_TAB_WIDTH));
-    int dy = DpiScaleY(hwnd, TABBAR_HEIGHT);
+    int dx = DpiScale(hwnd, std::max(gGlobalPrefs->tabWidth, MIN_TAB_WIDTH));
+    int dy = DpiScale(hwnd, TABBAR_HEIGHT);
     return SizeI(dx, dy);
-}
-
-static inline Color ToColor(COLORREF c) {
-    return Color(GetRValueSafe(c), GetGValueSafe(c), GetBValueSafe(c));
 }
 
 class TabPainter {
@@ -91,16 +95,16 @@ class TabPainter {
 
         GraphicsPath shape;
         // define tab's body
-        shape.AddRectangle(Rect(0, 0, width, height));
+        shape.AddRectangle(Gdiplus::Rect(0, 0, width, height));
         shape.SetMarker();
 
         // define "x"'s circle
         int c = int((float)height * 0.78f + 0.5f); // size of bounding square for the circle
-        int maxC = DpiScaleX(hwnd, 17);
+        int maxC = DpiScale(hwnd, 17);
         if (height > maxC) {
-            c = DpiScaleX(hwnd, 17);
+            c = DpiScale(hwnd, 17);
         }
-        Point p(width - c - DpiScaleX(hwnd, 3), (height - c) / 2); // circle's position
+        Gdiplus::Point p(width - c - DpiScale(hwnd, 3), (height - c) / 2); // circle's position
         shape.AddEllipse(p.X, p.Y, c, c);
         shape.SetMarker();
         // define "x"
@@ -118,7 +122,7 @@ class TabPainter {
 
     // Finds the index of the tab, which contains the given point.
     int IndexFromPoint(int x, int y, bool* inXbutton = nullptr) {
-        Point point(x, y);
+        Gdiplus::Point point(x, y);
         Graphics gfx(hwnd);
         GraphicsPath shapes(data->Points, data->Types, data->Count);
         GraphicsPath shape;
@@ -129,7 +133,7 @@ class TabPainter {
         REAL yPosTab = inTitlebar ? 0.0f : REAL(rClient.dy - height - 1);
         gfx.TranslateTransform(1.0f, yPosTab);
         for (int i = 0; i < Count(); i++) {
-            Point pt(point);
+            Gdiplus::Point pt(point);
             gfx.TransformPoints(CoordinateSpaceWorld, CoordinateSpaceDevice, &pt, 1);
             if (shape.IsVisible(pt, &gfx)) {
                 iterator.NextMarker(&shape);
@@ -202,7 +206,7 @@ class TabPainter {
 
         Font f(hdc, GetDefaultGuiFont());
         // TODO: adjust these constant values for DPI?
-        RectF layout((REAL)DpiScaleX(hwnd, 3), 1.0f, REAL(width - DpiScaleX(hwnd, 20)), (REAL)height);
+        RectF layout((REAL)DpiScale(hwnd, 3), 1.0f, REAL(width - DpiScale(hwnd, 20)), (REAL)height);
         StringFormat sf(StringFormat::GenericDefault());
         sf.SetFormatFlags(StringFormatFlagsNoWrap);
         sf.SetLineAlignment(StringAlignmentCenter);
@@ -245,10 +249,10 @@ class TabPainter {
             // paint tab's body
             gfx.SetCompositingMode(CompositingModeSourceCopy);
             iterator.NextMarker(&shape);
-            br.SetColor(ToColor(bgCol));
-            Point points[4];
+            br.SetColor(GdiRgbFromCOLORREF(bgCol));
+            Gdiplus::Point points[4];
             shape.GetPathPoints(points, 4);
-            Rect body(points[0].X, points[0].Y, points[2].X - points[0].X, points[2].Y - points[0].Y);
+            Gdiplus::Rect body(points[0].X, points[0].Y, points[2].X - points[0].X, points[2].Y - points[0].Y);
             body.Inflate(0, 0);
             gfx.SetClip(body);
             body.Inflate(5, 5);
@@ -257,28 +261,32 @@ class TabPainter {
 
             // draw tab's text
             gfx.SetCompositingMode(CompositingModeSourceOver);
-            br.SetColor(ToColor(textCol));
+            br.SetColor(GdiRgbFromCOLORREF(textCol));
             gfx.DrawString(text.at(i), -1, &f, layout, &sf, &br);
 
             // paint "x"'s circle
             iterator.NextMarker(&shape);
             bool closeCircleEnabled = true;
             if ((xClicked == i || xHighlighted == i) && closeCircleEnabled) {
-                br.SetColor(ToColor(circleColor));
+                br.SetColor(GdiRgbFromCOLORREF(circleColor));
                 gfx.FillPath(&br, &shape);
             }
 
             // paint "x"
             iterator.NextMarker(&shape);
-            pen.SetColor(ToColor(xColor));
+            pen.SetColor(GdiRgbFromCOLORREF(xColor));
             gfx.DrawPath(&pen, &shape);
             iterator.Rewind();
         }
     }
 
-    int Count() { return (int)text.size(); }
+    int Count() {
+        return (int)text.size();
+    }
 
-    void Insert(int index, const WCHAR* t) { text.InsertAt(index, str::Dup(t)); }
+    void Insert(int index, const WCHAR* t) {
+        text.InsertAt(index, str::Dup(t));
+    }
 
     bool Set(int index, const WCHAR* t) {
         if (index < Count()) {
@@ -296,7 +304,9 @@ class TabPainter {
         return false;
     }
 
-    void DeleteAll() { text.Reset(); }
+    void DeleteAll() {
+        text.Reset();
+    }
 };
 
 static void SetTabTitle(WindowInfo* win, TabInfo* tab) {
@@ -620,8 +630,8 @@ void CreateTabbar(WindowInfo* win) {
 // verifies that TabInfo state is consistent with WindowInfo state
 static NO_INLINE void VerifyTabInfo(WindowInfo* win, TabInfo* tdata) {
     CrashIf(tdata->ctrl != win->ctrl);
-    AutoFreeW winTitle(win::GetText(win->hwndFrame));
-    CrashIf(!str::Eq(winTitle.Get(), tdata->frameTitle));
+    AutoFreeWstr winTitle(win::GetText(win->hwndFrame));
+    SubmitCrashIf(!str::Eq(winTitle.Get(), tdata->frameTitle));
     bool expectedTocVisibility = tdata->showToc; // if not in presentation mode
     if (PM_DISABLED != win->presentation) {
         expectedTocVisibility = false; // PM_BLACK_SCREEN, PM_WHITE_SCREEN
@@ -629,8 +639,8 @@ static NO_INLINE void VerifyTabInfo(WindowInfo* win, TabInfo* tdata) {
             expectedTocVisibility = tdata->showTocPresentation;
         }
     }
-    CrashIf(win->tocVisible != expectedTocVisibility);
-    CrashIf(tdata->canvasRc != win->canvasRc);
+    SubmitCrashIf(win->tocVisible != expectedTocVisibility);
+    SubmitCrashIf(tdata->canvasRc != win->canvasRc);
 }
 
 // Must be called when the active tab is losing selection.
@@ -640,23 +650,22 @@ void SaveCurrentTabInfo(WindowInfo* win) {
         return;
 
     int current = TabCtrl_GetCurSel(win->hwndTabBar);
-    if (-1 == current)
+    if (-1 == current) {
         return;
+    }
     CrashIf(win->currentTab != win->tabs.at(current));
 
-    TabInfo* tdata = win->currentTab;
-    CrashIf(!tdata);
+    TabInfo* tab = win->currentTab;
+    CrashIf(!tab);
     if (win->tocLoaded) {
-        tdata->tocState.Reset();
-        HTREEITEM hRoot = win->tocTreeCtrl->GetRoot();
-        if (hRoot)
-            UpdateTocExpansionState(tdata, win->tocTreeCtrl, hRoot);
+        TocTree* tocTree = tab->ctrl->GetToc();
+        UpdateTocExpansionState(tab->tocState, win->tocTreeCtrl, tocTree);
     }
-    VerifyTabInfo(win, tdata);
+    VerifyTabInfo(win, tab);
 
     // update the selection history
-    win->tabSelectionHistory->Remove(tdata);
-    win->tabSelectionHistory->Push(tdata);
+    win->tabSelectionHistory->Remove(tab);
+    win->tabSelectionHistory->Push(tab);
 }
 
 void UpdateCurrentTabBgColor(WindowInfo* win) {
@@ -674,8 +683,9 @@ void UpdateCurrentTabBgColor(WindowInfo* win) {
 // On load of a new document we insert a new tab item in the tab bar.
 TabInfo* CreateNewTab(WindowInfo* win, const WCHAR* filePath) {
     CrashIf(!win);
-    if (!win)
+    if (!win) {
         return nullptr;
+    }
 
     TabInfo* tab = new TabInfo(filePath);
     win->tabs.Append(tab);
@@ -810,19 +820,19 @@ void UpdateTabWidth(WindowInfo* win) {
 }
 
 void SetTabsInTitlebar(WindowInfo* win, bool set) {
-    if (set == win->tabsInTitlebar)
+    if (set == win->tabsInTitlebar) {
         return;
+    }
     win->tabsInTitlebar = set;
     TabPainter* tab = (TabPainter*)GetWindowLongPtr(win->hwndTabBar, GWLP_USERDATA);
     tab->inTitlebar = set;
     SetParent(win->hwndTabBar, set ? win->hwndCaption : win->hwndFrame);
     ShowWindow(win->hwndCaption, set ? SW_SHOW : SW_HIDE);
-    if (set != win->isMenuHidden)
+    if (set != win->isMenuHidden) {
         ShowHideMenuBar(win);
+    }
     if (set) {
-        win->caption->UpdateTheme();
-        win->caption->UpdateColors(win->hwndFrame == GetForegroundWindow());
-        win->caption->UpdateBackgroundAlpha();
+        CaptionUpdateUI(win, win->caption);
         RelayoutCaption(win);
     } else if (dwm::IsCompositionEnabled()) {
         // remove the extended frame
@@ -830,18 +840,23 @@ void SetTabsInTitlebar(WindowInfo* win, bool set) {
         dwm::ExtendFrameIntoClientArea(win->hwndFrame, &margins);
         win->extendedFrameHeight = 0;
     }
-    SetWindowPos(win->hwndFrame, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE);
+    UINT flags = SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE;
+    SetWindowPos(win->hwndFrame, nullptr, 0, 0, 0, 0, flags);
 }
 
 // Selects the given tab (0-based index).
 void TabsSelect(WindowInfo* win, int tabIndex) {
     int count = (int)win->tabs.size();
-    if (count < 2 || tabIndex < 0 || tabIndex >= count)
+    if (count < 2 || tabIndex < 0 || tabIndex >= count) {
         return;
+    }
     NMHDR ntd = {nullptr, 0, TCN_SELCHANGING};
-    if (TabsOnNotify(win, (LPARAM)&ntd))
+    if (TabsOnNotify(win, (LPARAM)&ntd)) {
         return;
+    }
     win->currentTab = win->tabs.at(tabIndex);
+    AutoFree path = strconv::WstrToUtf8(win->currentTab->filePath);
+    logf("TabsSelect: tabIndex: %d, new win->currentTab: 0x%p, path: '%s'\n", tabIndex, win->currentTab, path.get());
     int prevIndex = TabCtrl_SetCurSel(win->hwndTabBar, tabIndex);
     if (prevIndex != -1) {
         ntd.code = TCN_SELCHANGE;

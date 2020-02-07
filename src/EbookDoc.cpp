@@ -1,9 +1,10 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/Archive.h"
 #include "utils/FileUtil.h"
+#include "utils/GdiPlusUtil.h"
 #include "utils/HtmlParserLookup.h"
 #include "utils/HtmlPullParser.h"
 #include "utils/PalmDbReader.h"
@@ -11,7 +12,8 @@
 #include "utils/WinUtil.h"
 #include "utils/ScopedWin.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "EbookDoc.h"
 #include "MobiDoc.h"
@@ -80,8 +82,8 @@ static char* DecodeTextToUtf8(const char* s, bool isXML = false) {
         s = tmp;
     }
     if (str::StartsWith(s, UTF16_BOM)) {
-        auto tmp2 = str::conv::ToUtf8((WCHAR*)(s + 2));
-        return tmp2.StealData();
+        auto tmp2 = strconv::WstrToUtf8((WCHAR*)(s + 2));
+        return (char*)tmp2.data();
     }
     if (str::StartsWith(s, UTF8_BOM))
         return str::Dup(s + 3);
@@ -90,8 +92,8 @@ static char* DecodeTextToUtf8(const char* s, bool isXML = false) {
         return str::Dup(s);
     if (CP_ACP == codePage)
         codePage = GuessTextCodepage(s, str::Len(s), CP_ACP);
-    auto tmp2 = str::ToMultiByte(s, codePage, CP_UTF8);
-    return tmp2.StealData();
+    auto tmp2 = strconv::ToMultiByte(s, codePage, CP_UTF8);
+    return (char*)tmp2.data();
 }
 
 char* NormalizeURL(const char* url, const char* base) {
@@ -128,7 +130,7 @@ char* NormalizeURL(const char* url, const char* base) {
             *dst++ = '/';
     }
     *dst = '\0';
-    return norm.StealData();
+    return norm.release();
 }
 
 inline char decode64(char c) {
@@ -181,7 +183,7 @@ static char* Base64Decode(const char* s, size_t sLen, size_t* lenOut) {
     return result;
 }
 
-static inline void AppendChar(str::Str<char>& htmlData, char c) {
+static inline void AppendChar(str::Str& htmlData, char c) {
     switch (c) {
         case '&':
             htmlData.Append("&amp;");
@@ -193,20 +195,22 @@ static inline void AppendChar(str::Str<char>& htmlData, char c) {
             htmlData.Append("&quot;");
             break;
         default:
-            htmlData.Append(c);
+            htmlData.AppendChar(c);
             break;
     }
 }
 
-static char* DecodeDataURI(const char* url, size_t* lenOut) {
+static std::string_view DecodeDataURI(const char* url) {
     const char* comma = str::FindChar(url, ',');
-    if (!comma)
-        return nullptr;
+    if (!comma) {
+        return {};
+    }
     const char* data = comma + 1;
-    if (comma - url >= 12 && str::EqN(comma - 7, ";base64", 7))
-        return Base64Decode(data, str::Len(data), lenOut);
-    if (lenOut)
-        *lenOut = str::Len(data);
+    if (comma - url >= 12 && str::EqN(comma - 7, ";base64", 7)) {
+        size_t lenOut = 0;
+        char* d = Base64Decode(data, str::Len(data), &lenOut);
+        return {d, lenOut};
+    }
     return str::Dup(data);
 }
 
@@ -229,8 +233,9 @@ void PropertyMap::Set(DocumentProperty prop, char* valueUtf8, bool replace) {
 
 WCHAR* PropertyMap::Get(DocumentProperty prop) const {
     int idx = Find(prop);
-    if (idx >= 0 && values[idx])
-        return str::conv::FromUtf8(values[idx]);
+    if (idx >= 0 && values[idx]) {
+        return strconv::Utf8ToWstr(values[idx].get());
+    }
     return nullptr;
 }
 
@@ -265,26 +270,59 @@ EpubDoc::~EpubDoc() {
     delete zip;
 }
 
+// TODO: switch to seqstring
+static bool isHtmlMediaType(const WCHAR* mediatype) {
+    if (str::Eq(mediatype, L"application/xhtml+xml")) {
+        return true;
+    }
+    if (str::Eq(mediatype, L"application/html+xml")) {
+        return true;
+    }
+    if (str::Eq(mediatype, L"application/x-dtbncx+xml")) {
+        return true;
+    }
+    if (str::Eq(mediatype, L"text/html")) {
+        return true;
+    }
+    if (str::Eq(mediatype, L"text/xml")) {
+        return true;
+    }
+    return false;
+}
+
+// TODO: switch to seqstring
+static bool isImageMediaType(const WCHAR* mediatype) {
+    return str::Eq(mediatype, L"image/png") || str::Eq(mediatype, L"image/jpeg") || str::Eq(mediatype, L"image/gif");
+}
+
 bool EpubDoc::Load() {
-    OwnedData container(zip->GetFileDataByName("META-INF/container.xml"));
-    if (!container.data)
+    if (!zip) {
         return false;
+    }
+    AutoFree container(zip->GetFileDataByName("META-INF/container.xml"));
+    if (!container.data) {
+        return false;
+    }
     HtmlParser parser;
     HtmlElement* node = parser.ParseInPlace(container.data);
-    if (!node)
+    if (!node) {
         return false;
+    }
+
     // only consider the first <rootfile> element (default rendition)
     node = parser.FindElementByNameNS("rootfile", EPUB_CONTAINER_NS);
-    if (!node)
+    if (!node) {
         return false;
-    AutoFreeW contentPath(node->GetAttribute("full-path"));
-    if (!contentPath)
+    }
+    AutoFreeWstr contentPath(node->GetAttribute("full-path"));
+    if (!contentPath) {
         return false;
+    }
     url::DecodeInPlace(contentPath);
 
     // encrypted files will be ignored (TODO: support decryption)
     WStrList encList;
-    OwnedData encryption(zip->GetFileDataByName("META-INF/encryption.xml"));
+    AutoFree encryption(zip->GetFileDataByName("META-INF/encryption.xml"));
     if (encryption.data) {
         (void)parser.ParseInPlace(encryption.data);
         HtmlElement* cr = parser.FindElementByNameNS("CipherReference", EPUB_ENC_NS);
@@ -298,7 +336,7 @@ bool EpubDoc::Load() {
         }
     }
 
-    OwnedData content(zip->GetFileDataByName(contentPath));
+    AutoFree content(zip->GetFileDataByName(contentPath));
     if (!content.data) {
         return false;
     }
@@ -321,35 +359,40 @@ bool EpubDoc::Load() {
     WStrList idList, pathList;
 
     for (node = node->down; node; node = node->next) {
-        AutoFreeW mediatype(node->GetAttribute("media-type"));
-        if (str::Eq(mediatype, L"image/png") || str::Eq(mediatype, L"image/jpeg") || str::Eq(mediatype, L"image/gif")) {
-            AutoFreeW imgPath(node->GetAttribute("href"));
-            if (!imgPath)
+        AutoFreeWstr mediatype(node->GetAttribute("media-type"));
+        if (isImageMediaType(mediatype)) {
+            AutoFreeWstr imgPath = node->GetAttribute("href");
+            if (!imgPath) {
                 continue;
+            }
             url::DecodeInPlace(imgPath);
             imgPath.Set(str::Join(contentPath, imgPath));
-            if (encList.Contains(imgPath))
+            if (encList.Contains(imgPath)) {
                 continue;
+            }
             // load the image lazily
             ImageData2 data = {0};
-            auto tmp = str::conv::ToUtf8(imgPath);
-            data.fileName = tmp.StealData();
+            auto tmp = strconv::WstrToUtf8(imgPath);
+            data.fileName = (char*)tmp.data();
             data.fileId = zip->GetFileId(data.fileName);
             images.Append(data);
-        } else if (str::Eq(mediatype, L"application/xhtml+xml") || str::Eq(mediatype, L"application/html+xml") ||
-                   str::Eq(mediatype, L"application/x-dtbncx+xml") || str::Eq(mediatype, L"text/html") ||
-                   str::Eq(mediatype, L"text/xml")) {
-            AutoFreeW htmlPath(node->GetAttribute("href"));
-            if (!htmlPath)
+        } else if (isHtmlMediaType(mediatype)) {
+            AutoFreeWstr htmlPath(node->GetAttribute("href"));
+            if (!htmlPath) {
                 continue;
+            }
             url::DecodeInPlace(htmlPath);
-            AutoFreeW htmlId(node->GetAttribute("id"));
+            AutoFreeWstr htmlId(node->GetAttribute("id"));
             // EPUB 3 ToC
-            AutoFreeW properties(node->GetAttribute("properties"));
-            if (properties && str::Find(properties, L"nav") && str::Eq(mediatype, L"application/xhtml+xml"))
+            AutoFreeWstr properties(node->GetAttribute("properties"));
+            if (properties && str::Find(properties, L"nav") && str::Eq(mediatype, L"application/xhtml+xml")) {
                 tocPath.Set(str::Join(contentPath, htmlPath));
-            if (encList.size() > 0 && encList.Contains(AutoFreeW(str::Join(contentPath, htmlPath))))
+            }
+
+            AutoFreeWstr fullContentPath = str::Join(contentPath, htmlPath);
+            if (encList.size() > 0 && encList.Contains(fullContentPath)) {
                 continue;
+            }
             if (htmlPath && htmlId) {
                 idList.Append(htmlId.StealData());
                 pathList.Append(htmlPath.StealData());
@@ -358,38 +401,45 @@ bool EpubDoc::Load() {
     }
 
     node = parser.FindElementByNameNS("spine", EPUB_OPF_NS);
-    if (!node)
+    if (!node) {
         return false;
+    }
+
     // EPUB 2 ToC
-    AutoFreeW tocId(node->GetAttribute("toc"));
+    AutoFreeWstr tocId(node->GetAttribute("toc"));
     if (tocId && !tocPath && idList.Contains(tocId)) {
         tocPath.Set(str::Join(contentPath, pathList.at(idList.Find(tocId))));
         isNcxToc = true;
     }
-    AutoFreeW readingDir(node->GetAttribute("page-progression-direction"));
-    if (readingDir)
+    AutoFreeWstr readingDir(node->GetAttribute("page-progression-direction"));
+    if (readingDir) {
         isRtlDoc = str::EqI(readingDir, L"rtl");
+    }
 
     for (node = node->down; node; node = node->next) {
-        if (!node->NameIsNS("itemref", EPUB_OPF_NS))
+        if (!node->NameIsNS("itemref", EPUB_OPF_NS)) {
             continue;
-        AutoFreeW idref(node->GetAttribute("idref"));
-        if (!idref || !idList.Contains(idref))
+        }
+        AutoFreeWstr idref = node->GetAttribute("idref");
+        if (!idref || !idList.Contains(idref)) {
             continue;
+        }
 
-        AutoFreeW fullPath(str::Join(contentPath, pathList.at(idList.Find(idref))));
-        OwnedData html(zip->GetFileDataByName(fullPath));
+        const WCHAR* fileName = pathList.at(idList.Find(idref));
+        AutoFreeWstr fullPath = str::Join(contentPath, fileName);
+        AutoFree html = zip->GetFileDataByName(fullPath);
         if (!html.data) {
             continue;
         }
-        html.TakeOwnership(DecodeTextToUtf8(html.data, true));
+        char* decoded = DecodeTextToUtf8(html.data, true);
+        html.TakeOwnershipOf(decoded);
         if (!html.data) {
             continue;
         }
         // insert explicit page-breaks between sections including
         // an anchor with the file name at the top (for internal links)
-        OwnedData utf8_path(str::conv::ToUtf8(fullPath));
-        CrashIfDebugOnly(str::FindChar(utf8_path.Get(), '"'));
+        AutoFree utf8_path = strconv::WstrToUtf8(fullPath);
+        DebugCrashIf(str::FindChar(utf8_path.Get(), '"'));
         str::TransChars(utf8_path.Get(), "\"", "'");
         htmlData.AppendFmt("<pagebreak page_path=\"%s\" page_marker />", utf8_path.Get());
         htmlData.Append(html.data);
@@ -456,8 +506,8 @@ ImageData* EpubDoc::GetImageData(const char* fileName, const char* pagePath) {
             if (str::EndsWithI(img->fileName, fileName)) {
                 if (!img->base.data) {
                     auto res = zip->GetFileDataById(img->fileId);
-                    img->base.len = res.size;
-                    img->base.data = res.StealData();
+                    img->base.len = res.size();
+                    img->base.data = (char*)res.data();
                 }
                 if (img->base.data)
                     return &img->base;
@@ -475,8 +525,8 @@ ImageData* EpubDoc::GetImageData(const char* fileName, const char* pagePath) {
         if (str::Eq(img->fileName, url)) {
             if (!img->base.data) {
                 auto res = zip->GetFileDataById(img->fileId);
-                img->base.len = res.size;
-                img->base.data = res.StealData();
+                img->base.len = res.size();
+                img->base.data = (char*)res.data();
             }
             if (img->base.data)
                 return &img->base;
@@ -488,8 +538,8 @@ ImageData* EpubDoc::GetImageData(const char* fileName, const char* pagePath) {
     data.fileId = zip->GetFileId(url);
     if (data.fileId != (size_t)-1) {
         auto res = zip->GetFileDataById(data.fileId);
-        data.base.len = res.size;
-        data.base.data = res.StealData();
+        data.base.len = res.size();
+        data.base.data = (char*)res.data();
         if (data.base.data) {
             data.fileName = str::Dup(url);
             images.Append(data);
@@ -500,7 +550,7 @@ ImageData* EpubDoc::GetImageData(const char* fileName, const char* pagePath) {
     return nullptr;
 }
 
-OwnedData EpubDoc::GetFileData(const char* relPath, const char* pagePath) {
+std::string_view EpubDoc::GetFileData(const char* relPath, const char* pagePath) {
     if (!pagePath) {
         CrashIf(true);
         return {};
@@ -559,20 +609,22 @@ bool EpubDoc::ParseNavToc(const char* data, size_t dataLen, const char* pagePath
             while ((tok = parser.Next()) != nullptr && !tok->IsError() && (!tok->IsEndTag() || itemTag != tok->tag)) {
                 if (tok->IsText()) {
                     AutoFree part(str::DupN(tok->s, tok->sLen));
-                    if (!text)
-                        text.Set(part.StealData());
-                    else
+                    if (!text) {
+                        text.Set(part.release());
+                    } else {
                         text.Set(str::Join(text, part));
+                    }
                 }
             }
-            if (!text)
+            if (!text) {
                 continue;
-            AutoFreeW itemText(str::conv::FromUtf8(text));
+            }
+            AutoFreeWstr itemText(strconv::Utf8ToWstr(text.get()));
             str::NormalizeWS(itemText);
-            AutoFreeW itemSrc;
+            AutoFreeWstr itemSrc;
             if (href) {
                 href.Set(NormalizeURL(href, pagePath));
-                itemSrc.Set(str::conv::FromHtmlUtf8(href, str::Len(href)));
+                itemSrc.Set(strconv::FromHtmlUtf8(href, str::Len(href)));
             }
             visitor->Visit(itemText, itemSrc, level);
         }
@@ -586,13 +638,15 @@ bool EpubDoc::ParseNcxToc(const char* data, size_t dataLen, const char* pagePath
     HtmlToken* tok;
     // skip to the start of the navMap
     while ((tok = parser.Next()) != nullptr && !tok->IsError()) {
-        if (tok->IsStartTag() && tok->NameIsNS("navMap", EPUB_NCX_NS))
+        if (tok->IsStartTag() && tok->NameIsNS("navMap", EPUB_NCX_NS)) {
             break;
+        }
     }
-    if (!tok || tok->IsError())
+    if (!tok || tok->IsError()) {
         return false;
+    }
 
-    AutoFreeW itemText, itemSrc;
+    AutoFreeWstr itemText, itemSrc;
     int level = 0;
     while ((tok = parser.Next()) != nullptr && !tok->IsError() &&
            (!tok->IsEndTag() || !tok->NameIsNS("navMap", EPUB_NCX_NS))) {
@@ -602,21 +656,24 @@ bool EpubDoc::ParseNcxToc(const char* data, size_t dataLen, const char* pagePath
                 itemText.Reset();
                 itemSrc.Reset();
             }
-            if (tok->IsStartTag())
+            if (tok->IsStartTag()) {
                 level++;
-            else if (tok->IsEndTag() && level > 0)
+            } else if (tok->IsEndTag() && level > 0) {
                 level--;
+            }
         } else if (tok->IsStartTag() && tok->NameIsNS("text", EPUB_NCX_NS)) {
-            if ((tok = parser.Next()) == nullptr || tok->IsError())
+            if ((tok = parser.Next()) == nullptr || tok->IsError()) {
                 break;
-            if (tok->IsText())
-                itemText.Set(str::conv::FromHtmlUtf8(tok->s, tok->sLen));
+            }
+            if (tok->IsText()) {
+                itemText.Set(strconv::FromHtmlUtf8(tok->s, tok->sLen));
+            }
         } else if (tok->IsTag() && !tok->IsEndTag() && tok->NameIsNS("content", EPUB_NCX_NS)) {
             AttrInfo* attrInfo = tok->GetAttrByName("src");
             if (attrInfo) {
                 AutoFree src(str::DupN(attrInfo->val, attrInfo->valLen));
                 src.Set(NormalizeURL(src, pagePath));
-                itemSrc.Set(str::conv::FromHtmlUtf8(src, str::Len(src)));
+                itemSrc.Set(strconv::FromHtmlUtf8(src, str::Len(src)));
             }
         }
     }
@@ -625,20 +682,22 @@ bool EpubDoc::ParseNcxToc(const char* data, size_t dataLen, const char* pagePath
 }
 
 bool EpubDoc::ParseToc(EbookTocVisitor* visitor) {
-    if (!tocPath)
+    if (!tocPath) {
         return false;
+    }
     size_t tocDataLen;
     AutoFree tocData;
     {
         ScopedCritSec scope(&zipAccess);
         auto res = zip->GetFileDataByName(tocPath);
-        tocDataLen = res.size;
-        tocData.Set(res.StealData());
+        tocDataLen = res.size();
+        tocData.Set(res.data());
     }
-    if (!tocData)
+    if (!tocData) {
         return false;
+    }
 
-    OwnedData pagePath(str::conv::ToUtf8(tocPath));
+    AutoFree pagePath(strconv::WstrToUtf8(tocPath));
     if (isNcxToc) {
         return ParseNcxToc(tocData, tocDataLen, pagePath.Get(), visitor);
     }
@@ -649,15 +708,17 @@ bool EpubDoc::IsSupportedFile(const WCHAR* fileName, bool sniff) {
     if (!sniff) {
         return str::EndsWithI(fileName, L".epub");
     }
-    Archive* archive = OpenZipArchive(fileName, true);
-    defer { delete archive; };
-    OwnedData mimetype(archive->GetFileDataByName("mimetype"));
+    AutoDelete<MultiFormatArchive> archive = OpenZipArchive(fileName, true);
+    if (!archive.get()) {
+        return false;
+    }
+    AutoFree mimetype(archive->GetFileDataByName("mimetype"));
     if (!mimetype.data) {
         return false;
     }
     char* d = mimetype.data;
     // trailing whitespace is allowed for the mimetype file
-    for (size_t i = mimetype.size; i > 0; i--) {
+    for (size_t i = mimetype.size(); i > 0; i--) {
         if (!str::IsWs(d[i - 1])) {
             break;
         }
@@ -697,7 +758,8 @@ EpubDoc* EpubDoc::CreateFromStream(IStream* stream) {
 const char* FB2_MAIN_NS = "http://www.gribuser.ru/xml/fictionbook/2.0";
 const char* FB2_XLINK_NS = "http://www.w3.org/1999/xlink";
 
-Fb2Doc::Fb2Doc(const WCHAR* fileName) : fileName(str::Dup(fileName)), stream(nullptr), isZipped(false), hasToc(false) {}
+Fb2Doc::Fb2Doc(const WCHAR* fileName) : fileName(str::Dup(fileName)), stream(nullptr), isZipped(false), hasToc(false) {
+}
 
 Fb2Doc::Fb2Doc(IStream* stream) : fileName(nullptr), stream(stream), isZipped(false), hasToc(false) {
     stream->AddRef();
@@ -712,58 +774,80 @@ Fb2Doc::~Fb2Doc() {
         stream->Release();
 }
 
-bool Fb2Doc::Load() {
-    CrashIf(!stream && !fileName);
-    OwnedData data;
-    if (fileName) {
-        Archive* archive = OpenZipArchive(fileName, false);
-        auto& fileInfos = archive->GetFileInfos();
-        size_t nFiles = fileInfos.size();
-        isZipped = nFiles > 0;
-        if (nFiles > 1) {
-            // if the ZIP file contains more than one file, we try to be rather
-            // restrictive in what we accept in order not to accidentally accept
-            // too many archives which only contain FB2 files among others:
-            // the file must contain a single .fb2 file and may only contain
-            // .url files in addition (TODO: anything else?)
-            for (auto fileInfo : fileInfos) {
-                auto fileName = fileInfo->name;
-                const char* ext = path::GetExt(fileName.data());
-                if (str::EqI(ext, ".fb2") && data.IsEmpty()) {
-                    data = archive->GetFileDataById(fileInfo->fileId);
-                } else if (!str::EqI(ext, ".url")) {
-                    delete archive;
-                    return false;
-                }
-            }
-        } else if (isZipped) {
-            data = archive->GetFileDataById(0);
-        } else {
-            data = file::ReadFile(fileName);
-        }
-        delete archive;
-    } else if (stream) {
-        data = GetDataFromStream(stream);
-        if (str::StartsWith(data.Get(), "PK\x03\x04")) {
-            Archive* archive = OpenZipArchive(stream, false);
-            size_t nFiles = archive->GetFileInfos().size();
-            if (nFiles == 1) {
-                isZipped = true;
-                data = archive->GetFileDataById(0);
-            }
-            delete archive;
+static std::string_view loadFromFile(Fb2Doc* doc) {
+    MultiFormatArchive* archive = OpenZipArchive(doc->fileName, false);
+    if (!archive) {
+        return file::ReadFile(doc->fileName);
+    }
+
+    AutoDelete delArchive(archive);
+
+    // we have archive with more than 1 file
+    doc->isZipped = true;
+    auto& fileInfos = archive->GetFileInfos();
+    size_t nFiles = fileInfos.size();
+
+    if (nFiles == 0) {
+        return {};
+    }
+
+    if (nFiles == 1) {
+        return archive->GetFileDataById(0);
+    }
+
+    std::string_view data;
+    // if the ZIP file contains more than one file, we try to be rather
+    // restrictive in what we accept in order not to accidentally accept
+    // too many archives which only contain FB2 files among others:
+    // the file must contain a single .fb2 file and may only contain
+    // .url files in addition (TODO: anything else?)
+    for (auto&& fileInfo : fileInfos) {
+        auto fileName = fileInfo->name;
+        const char* ext = path::GetExtNoFree(fileName.data());
+        if (str::EqI(ext, ".fb2") && data.empty()) {
+            data = archive->GetFileDataById(fileInfo->fileId);
+        } else if (!str::EqI(ext, ".url")) {
+            return {};
         }
     }
-    if (data.IsEmpty()) {
+    return data;
+}
+
+static std::string_view loadFromStream(Fb2Doc* doc) {
+    auto stream = doc->stream;
+    MultiFormatArchive* archive = OpenZipArchive(stream, false);
+    if (!archive) {
+        return {};
+    }
+
+    AutoDelete delArchive(archive);
+    size_t nFiles = archive->GetFileInfos().size();
+    if (nFiles != 1) {
+        return {};
+    }
+    doc->isZipped = true;
+    return archive->GetFileDataById(0);
+}
+
+bool Fb2Doc::Load() {
+    CrashIf(!stream && !fileName);
+
+    AutoFree data;
+    if (fileName) {
+        data = loadFromFile(this);
+    } else if (stream) {
+        data = loadFromStream(this);
+    }
+    if (data.empty()) {
         return false;
     }
     char* tmp = DecodeTextToUtf8(data.Get(), true);
     if (!tmp) {
         return false;
     }
-    data.TakeOwnership(tmp);
+    data.TakeOwnershipOf(tmp);
 
-    HtmlPullParser parser(data.Get(), data.size);
+    HtmlPullParser parser(data.Get(), data.size());
     HtmlToken* tok;
     int inBody = 0, inTitleInfo = 0, inDocInfo = 0;
     const char* bodyStart = nullptr;
@@ -775,9 +859,9 @@ bool Fb2Doc::Load() {
             if (!--inBody) {
                 if (xmlData.size() > 0)
                     xmlData.Append("<pagebreak />");
-                xmlData.Append('<');
+                xmlData.AppendChar('<');
                 xmlData.Append(bodyStart, tok->s - bodyStart + tok->sLen);
-                xmlData.Append('>');
+                xmlData.AppendChar('>');
             }
         } else if (inBody && tok->IsStartTag() && Tag_Title == tok->tag)
             hasToc = true;
@@ -798,16 +882,17 @@ bool Fb2Doc::Load() {
                    !(tok->IsEndTag() && tok->NameIsNS("author", FB2_MAIN_NS))) {
                 if (tok->IsText()) {
                     AutoFree author(ResolveHtmlEntities(tok->s, tok->sLen));
-                    if (docAuthor)
+                    if (docAuthor) {
                         docAuthor.Set(str::Join(docAuthor, " ", author));
-                    else
-                        docAuthor.Set(author.StealData());
+                    } else {
+                        docAuthor.Set(author.release());
+                    }
                 }
             }
             if (docAuthor) {
                 str::NormalizeWS(docAuthor);
                 if (!str::IsEmpty(docAuthor.Get()))
-                    props.Set(DocumentProperty::Author, docAuthor.StealData(), inTitleInfo != 0);
+                    props.Set(DocumentProperty::Author, docAuthor.release(), inTitleInfo != 0);
             }
         } else if (inTitleInfo && tok->IsStartTag() && tok->NameIsNS("date", FB2_MAIN_NS)) {
             AttrInfo* attr = tok->GetAttrByNameNS("value", FB2_MAIN_NS);
@@ -909,7 +994,7 @@ bool Fb2Doc::HasToc() const {
 }
 
 bool Fb2Doc::ParseToc(EbookTocVisitor* visitor) {
-    AutoFreeW itemText;
+    AutoFreeWstr itemText;
     bool inTitle = false;
     int titleCount = 0;
     int level = 0;
@@ -930,13 +1015,13 @@ bool Fb2Doc::ParseToc(EbookTocVisitor* visitor) {
             if (itemText)
                 str::NormalizeWS(itemText);
             if (!str::IsEmpty(itemText.Get())) {
-                AutoFreeW url(str::Format(TEXT(FB2_TOC_ENTRY_MARK) L"%d", titleCount));
+                AutoFreeWstr url(str::Format(TEXT(FB2_TOC_ENTRY_MARK) L"%d", titleCount));
                 visitor->Visit(itemText, url, level);
                 itemText.Reset();
             }
             inTitle = false;
         } else if (inTitle && tok->IsText()) {
-            AutoFreeW text(str::conv::FromHtmlUtf8(tok->s, tok->sLen));
+            AutoFreeWstr text(strconv::FromHtmlUtf8(tok->s, tok->sLen));
             if (str::IsEmpty(itemText.Get()))
                 itemText.Set(text.StealData());
             else
@@ -974,14 +1059,16 @@ Fb2Doc* Fb2Doc::CreateFromStream(IStream* stream) {
 
 /* ********** PalmDOC (and TealDoc) ********** */
 
-PalmDoc::PalmDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)) {}
+PalmDoc::PalmDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)) {
+}
 
-PalmDoc::~PalmDoc() {}
+PalmDoc::~PalmDoc() {
+}
 
 #define PDB_TOC_ENTRY_MARK "ToC!Entry!"
 
 // cf. http://wiki.mobileread.com/wiki/TealDoc
-static const char* HandleTealDocTag(str::Str<char>& builder, WStrVec& tocEntries, const char* text, size_t len,
+static const char* HandleTealDocTag(str::Str& builder, WStrVec& tocEntries, const char* text, size_t len,
                                     UINT codePage) {
     UNUSED(codePage);
     if (len < 9) {
@@ -1003,7 +1090,7 @@ static const char* HandleTealDocTag(str::Str<char>& builder, WStrVec& tocEntries
         // <BOOKMARK NAME="Contents">
         AttrInfo* attr = tok->GetAttrByName("NAME");
         if (attr && attr->valLen > 0) {
-            tocEntries.Append(str::conv::FromHtmlUtf8(attr->val, attr->valLen));
+            tocEntries.Append(strconv::FromHtmlUtf8(attr->val, attr->valLen));
             builder.AppendFmt("<a name=" PDB_TOC_ENTRY_MARK "%d>", tocEntries.size());
             return tok->s + tok->sLen;
         }
@@ -1068,22 +1155,23 @@ bool PalmDoc::Load() {
 
     const std::string_view text = mobiDoc->GetHtmlData();
     UINT codePage = GuessTextCodepage(text.data(), text.size(), CP_ACP);
-    OwnedData textUtf8(str::ToMultiByte(text.data(), codePage, CP_UTF8));
+    AutoFree textUtf8(strconv::ToMultiByte(text.data(), codePage, CP_UTF8));
 
     const char* start = textUtf8.Get();
-    const char* end = start + textUtf8.size;
+    const char* end = start + textUtf8.size();
     // TODO: speedup by not calling htmlData.Append() for every byte
     // but gather spans and memcpy them wholesale
     for (const char* curr = start; curr < end; curr++) {
         char c = *curr;
-        if ('&' == c)
+        if ('&' == c) {
             htmlData.Append("&amp;");
-        else if ('<' == c)
+        } else if ('<' == c) {
             curr = HandleTealDocTag(htmlData, tocEntries, curr, end - curr, codePage);
-        else if ('\n' == c || '\r' == c && curr + 1 < end && '\n' != *(curr + 1))
+        } else if ('\n' == c || '\r' == c && curr + 1 < end && '\n' != *(curr + 1)) {
             htmlData.Append("\n<br>");
-        else
-            htmlData.Append(c);
+        } else {
+            htmlData.AppendChar(c);
+        }
     }
 
     delete mobiDoc;
@@ -1109,24 +1197,27 @@ bool PalmDoc::HasToc() const {
 
 bool PalmDoc::ParseToc(EbookTocVisitor* visitor) {
     for (size_t i = 0; i < tocEntries.size(); i++) {
-        AutoFreeW name(str::Format(TEXT(PDB_TOC_ENTRY_MARK) L"%d", i + 1));
+        AutoFreeWstr name(str::Format(TEXT(PDB_TOC_ENTRY_MARK) L"%d", i + 1));
         visitor->Visit(tocEntries.at(i), name, 1);
     }
     return true;
 }
 
 bool PalmDoc::IsSupportedFile(const WCHAR* fileName, bool sniff) {
-    if (sniff) {
-        PdbReader pdbReader;
-        OwnedData data = file::ReadFile(fileName);
-        if (!pdbReader.Parse(std::move(data))) {
-            return false;
-        }
-
-        return str::Eq(pdbReader.GetDbType(), "TEXtREAd") || str::Eq(pdbReader.GetDbType(), "TEXtTlDc");
+    if (!sniff) {
+        bool isPdb = str::EndsWithI(fileName, L".pdb");
+        bool isPrc = str::EndsWithI(fileName, L".prc");
+        return isPdb || isPrc;
     }
 
-    return str::EndsWithI(fileName, L".pdb") || str::EndsWithI(fileName, L".prc");
+    PdbReader pdbReader;
+    auto data = file::ReadFile(fileName);
+    if (!pdbReader.Parse(data)) {
+        return false;
+    }
+
+    const char* kind = pdbReader.GetDbType();
+    return str::Eq(kind, "TEXtREAd") || str::Eq(kind, "TEXtTlDc");
 }
 
 PalmDoc* PalmDoc::CreateFromFile(const WCHAR* fileName) {
@@ -1140,7 +1231,8 @@ PalmDoc* PalmDoc::CreateFromFile(const WCHAR* fileName) {
 
 /* ********** Plain HTML ********** */
 
-HtmlDoc::HtmlDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)) {}
+HtmlDoc::HtmlDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)) {
+}
 
 HtmlDoc::~HtmlDoc() {
     for (size_t i = 0; i < images.size(); i++) {
@@ -1150,7 +1242,7 @@ HtmlDoc::~HtmlDoc() {
 }
 
 bool HtmlDoc::Load() {
-    OwnedData data(file::ReadFile(fileName));
+    AutoFree data(file::ReadFile(fileName));
     if (!data.data) {
         return false;
     }
@@ -1158,7 +1250,7 @@ bool HtmlDoc::Load() {
     if (!htmlData)
         return false;
 
-    pagePath.Set(str::conv::ToUtf8(fileName).StealData());
+    pagePath.Set(strconv::WstrToUtf8(fileName).data());
     str::TransChars(pagePath, "\\", "/");
 
     HtmlPullParser parser(htmlData, str::Len(htmlData));
@@ -1186,8 +1278,8 @@ bool HtmlDoc::Load() {
     return true;
 }
 
-std::string_view HtmlDoc::GetHtmlData() const {
-    return htmlData.AsView();
+std::string_view HtmlDoc::GetHtmlData() {
+    return htmlData.as_view();
 }
 
 ImageData* HtmlDoc::GetImageData(const char* fileName) {
@@ -1201,34 +1293,32 @@ ImageData* HtmlDoc::GetImageData(const char* fileName) {
     }
 
     ImageData2 data = {0};
-    data.base.data = LoadURL(url, &data.base.len);
-    if (!data.base.data)
+    auto urlData = LoadURL(url);
+    if (urlData.empty()) {
         return nullptr;
-    data.fileName = url.StealData();
+    }
+    data.base.data = (char*)urlData.data();
+    data.base.len = urlData.size();
+    data.fileName = url.release();
     images.Append(data);
     return &images.Last().base;
 }
 
-char* HtmlDoc::GetFileData(const char* relPath, size_t* lenOut) {
+std::string_view HtmlDoc::GetFileData(const char* relPath) {
     AutoFree url(NormalizeURL(relPath, pagePath));
-    return LoadURL(url, lenOut);
+    return LoadURL(url);
 }
 
-// TODO: convert to return OwnedData
-char* HtmlDoc::LoadURL(const char* url, size_t* lenOut) {
+std::string_view HtmlDoc::LoadURL(const char* url) {
     if (str::StartsWith(url, "data:")) {
-        return DecodeDataURI(url, lenOut);
+        return DecodeDataURI(url);
     }
     if (str::FindChar(url, ':')) {
-        return nullptr;
+        return {};
     }
-    AutoFreeW path(str::conv::FromUtf8(url));
+    AutoFreeWstr path(strconv::Utf8ToWstr(url));
     str::TransChars(path, L"/", L"\\");
-    OwnedData tmp(file::ReadFile(path));
-    if (lenOut) {
-        *lenOut = tmp.size;
-    }
-    return tmp.StealData();
+    return file::ReadFile(path);
 }
 
 WCHAR* HtmlDoc::GetProperty(DocumentProperty prop) const {
@@ -1256,7 +1346,8 @@ HtmlDoc* HtmlDoc::CreateFromFile(const WCHAR* fileName) {
 
 /* ********** Plain Text (and RFCs and TCR) ********** */
 
-TxtDoc::TxtDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)), isRFC(false) {}
+TxtDoc::TxtDoc(const WCHAR* fileName) : fileName(str::Dup(fileName)), isRFC(false) {
+}
 
 // cf. http://www.cix.co.uk/~gidds/Software/TCR.html
 #define TCR_HEADER "!!8-Bit!!"
@@ -1268,24 +1359,27 @@ static char* DecompressTcrText(const char* data, size_t dataLen) {
 
     const char* dict[256];
     for (int n = 0; n < dimof(dict); n++) {
-        if (curr >= end)
+        if (curr >= end) {
             return str::Dup(data);
+        }
         dict[n] = curr;
         curr += 1 + (uint8_t)*curr;
     }
 
-    str::Str<char> text(dataLen * 2);
+    str::Str text(dataLen * 2);
+    text.allowFailure = true;
     for (; curr < end; curr++) {
         const char* entry = dict[(uint8_t)*curr];
-        bool ok = text.AppendChecked(entry + 1, (uint8_t)*entry);
-        if (!ok)
+        bool ok = text.Append(entry + 1, (uint8_t)*entry);
+        if (!ok) {
             return nullptr;
+        }
     }
 
     return text.StealData();
 }
 
-static const char* TextFindLinkEnd(str::Str<char>& htmlData, const char* curr, char prevChar, bool fromWww = false) {
+static const char* TextFindLinkEnd(str::Str& htmlData, const char* curr, char prevChar, bool fromWww = false) {
     const char *end, *quote;
 
     // look for the end of the URL (ends in a space preceded maybe by interpunctuation)
@@ -1326,7 +1420,7 @@ inline bool IsEmailDomainChar(char c) {
     return isalnum((unsigned char)c) || '-' == c;
 }
 
-static const char* TextFindEmailEnd(str::Str<char>& htmlData, const char* curr) {
+static const char* TextFindEmailEnd(str::Str& htmlData, const char* curr) {
     AutoFree beforeAt;
     const char* end = curr;
     if ('@' == *curr) {
@@ -1371,7 +1465,7 @@ static const char* TextFindEmailEnd(str::Str<char>& htmlData, const char* curr) 
     return end;
 }
 
-static const char* TextFindRfcEnd(str::Str<char>& htmlData, const char* curr) {
+static const char* TextFindRfcEnd(str::Str& htmlData, const char* curr) {
     if (isalnum((unsigned char)*(curr - 1)))
         return nullptr;
     int rfc;
@@ -1382,20 +1476,20 @@ static const char* TextFindRfcEnd(str::Str<char>& htmlData, const char* curr) {
 }
 
 bool TxtDoc::Load() {
-    OwnedData text(file::ReadFile(fileName));
+    AutoFree text(file::ReadFile(fileName));
     if (str::EndsWithI(fileName, L".tcr") && str::StartsWith(text.data, TCR_HEADER)) {
-        text.TakeOwnership(DecompressTcrText(text.data, text.size));
+        text.TakeOwnershipOf(DecompressTcrText(text.data, text.size()));
     }
     if (!text.data) {
         return false;
     }
-    text.TakeOwnership(DecodeTextToUtf8(text.data));
+    text.TakeOwnershipOf(DecodeTextToUtf8(text.data));
     if (!text.data) {
         return false;
     }
 
     int rfc;
-    isRFC = str::Parse(path::GetBaseName(fileName), L"rfc%d.txt%$", &rfc) != nullptr;
+    isRFC = str::Parse(path::GetBaseNameNoFree(fileName), L"rfc%d.txt%$", &rfc) != nullptr;
 
     const char* linkEnd = nullptr;
     bool rfcHeader = false;
@@ -1491,8 +1585,8 @@ bool TxtDoc::ParseToc(EbookTocVisitor* visitor) {
     parser.Parse(htmlData.Get(), CP_UTF8);
     HtmlElement* el = nullptr;
     while ((el = parser.FindElementByName("b", el)) != nullptr) {
-        AutoFreeW title(el->GetAttribute("title"));
-        AutoFreeW id(el->GetAttribute("id"));
+        AutoFreeWstr title(el->GetAttribute("title"));
+        AutoFreeWstr id(el->GetAttribute("id"));
         int level = 1;
         if (str::IsDigit(*title)) {
             const WCHAR* dot = SkipDigits(title);

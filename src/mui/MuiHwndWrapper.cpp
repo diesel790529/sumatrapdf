@@ -1,14 +1,14 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
 #include "utils/Timer.h"
 #include "utils/WinUtil.h"
 #include "utils/HtmlParserLookup.h"
+#include "utils/Log.h"
+
 #include "Mui.h"
 #include "wingui/FrameRateWnd.h"
-//#define NOLOG 0
-#include "utils/DebugLog.h"
 
 namespace mui {
 
@@ -131,10 +131,11 @@ void HwndWrapper::LayoutIfRequested() {
 
 void HwndWrapper::OnPaint(HWND hwnd) {
     CrashIf(hwnd != hwndParent);
-    Timer t;
+    auto t = TimeGet();
     painter->Paint(hwnd, markedForRepaint);
     if (frameRateWnd) {
-        frameRateWnd->ShowFrameRateDur(t.GetTimeInMs());
+        auto dur = TimeSinceInMs(t);
+        frameRateWnd->ShowFrameRateDur(dur);
     }
     markedForRepaint = false;
 }

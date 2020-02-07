@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 /* A driver for various tests. The idea is that instead of having a separate
@@ -18,7 +18,9 @@
 #include "utils/Timer.h"
 #include "utils/WinUtil.h"
 #include "utils/ZipUtil.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "MobiDoc.h"
 #include "HtmlFormatter.h"
@@ -80,15 +82,15 @@ diff: 0.929000
 
 static void BenchMD5Size(void* data, size_t dataSize, char* desc) {
     unsigned char d1[16], d2[16];
-    Timer t1;
+    auto t1 = TimeGet();
     CalcMD5Digest((unsigned char*)data, dataSize, d1);
-    double dur1 = t1.GetTimeInMs();
+    double dur1 = TimeSinceInMs(t1);
 
-    Timer t2;
+    auto t2 = TimeGet();
     CalcMD5DigestWin(data, dataSize, d2);
     bool same = memeq(d1, d2, 16);
     CrashAlwaysIf(!same);
-    double dur2 = t2.GetTimeInMs();
+    double dur2 = TimeSinceInMs(t2);
     double diff = dur1 - dur2;
     printf("%s\nCalcMD5Digest   : %f ms\nCalcMD5DigestWin: %f ms\ndiff: %f\n", desc, dur1, dur2, diff);
 }
@@ -109,17 +111,17 @@ static void BenchMD5() {
 static void MobiSaveHtml(const WCHAR* filePathBase, MobiDoc* mb) {
     CrashAlwaysIf(!gSaveHtml);
 
-    AutoFreeW outFile(str::Join(filePathBase, L"_pp.html"));
+    AutoFreeWstr outFile(str::Join(filePathBase, L"_pp.html"));
 
     const std::string_view htmlData = mb->GetHtmlData();
     size_t htmlLen = htmlData.size();
     const char* html = htmlData.data();
     size_t ppHtmlLen;
     char* ppHtml = PrettyPrintHtml(html, htmlLen, ppHtmlLen);
-    file::WriteFile(outFile.Get(), ppHtml, ppHtmlLen);
+    file::WriteFile(outFile.Get(), {ppHtml, ppHtmlLen});
 
     outFile.Set(str::Join(filePathBase, L".html"));
-    file::WriteFile(outFile.Get(), html, htmlLen);
+    file::WriteFile(outFile.Get(), {html, htmlLen});
 }
 
 static void MobiSaveImage(const WCHAR* filePathBase, size_t imgNo, ImageData* img) {
@@ -128,8 +130,8 @@ static void MobiSaveImage(const WCHAR* filePathBase, size_t imgNo, ImageData* im
         return;
     const WCHAR* ext = GfxFileExtFromData(img->data, img->len);
     CrashAlwaysIf(!ext);
-    AutoFreeW fileName(str::Format(L"%s_img_%d%s", filePathBase, imgNo, ext));
-    file::WriteFile(fileName.Get(), img->data, img->len);
+    AutoFreeWstr fileName(str::Format(L"%s_img_%d%s", filePathBase, imgNo, ext));
+    file::WriteFile(fileName.Get(), {img->data, img->len});
 }
 
 static void MobiSaveImages(const WCHAR* filePathBase, MobiDoc* mb) {
@@ -165,9 +167,9 @@ static void MobiTestFile(const WCHAR* filePath) {
     }
 
     if (gLayout) {
-        Timer t;
+        auto t = TimeGet();
         MobiLayout(mobiDoc);
-        wprintf(L"Spent %.2f ms laying out %s\n", t.GetTimeInMs(), filePath);
+        wprintf(L"Spent %.2f ms laying out %s\n", TimeSinceInMs(t), filePath);
     }
 
     if (gSaveHtml || gSaveImages) {
@@ -177,8 +179,8 @@ static void MobiTestFile(const WCHAR* filePath) {
         // remove the file extension
         WCHAR* dir = MOBI_SAVE_DIR;
         dir::CreateAll(dir);
-        AutoFreeW fileName(str::Dup(path::GetBaseName(filePath)));
-        AutoFreeW filePathBase(path::Join(dir, fileName));
+        AutoFreeWstr fileName(str::Dup(path::GetBaseNameNoFree(filePath)));
+        AutoFreeWstr filePathBase(path::Join(dir, fileName));
         WCHAR* ext = (WCHAR*)str::FindCharLast(filePathBase.Get(), '.');
         *ext = 0;
 
@@ -218,7 +220,12 @@ void ZipCreateTest() {
     WCHAR* zipFileName = L"tester-tmp.zip";
     file::Delete(zipFileName);
     ZipCreator zc(zipFileName);
-    auto ok = zc.AddFile(L"makefile.msvc");
+    auto ok = zc.AddFile(L"premake5.lua");
+    if (!ok) {
+        printf("ZipCreateTest(): failed to add makefile.msvc");
+        return;
+    }
+    ok = zc.AddFile(L"premake5.files.lua");
     if (!ok) {
         printf("ZipCreateTest(): failed to add makefile.msvc");
         return;
@@ -237,9 +244,9 @@ int TesterMain() {
     WStrVec argv;
     ParseCmdLine(cmdLine, argv);
 
-    InitAllCommonControls();
-    ScopedGdiPlus gdi;
-    mui::Initialize();
+    // InitAllCommonControls();
+    // ScopedGdiPlus gdi;
+    // mui::Initialize();
 
     WCHAR* dirOrFile = nullptr;
 

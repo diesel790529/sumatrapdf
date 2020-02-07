@@ -1,16 +1,18 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/FileUtil.h"
 #include "utils/WinUtil.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EngineManager.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
 #include "DisplayModel.h"
-#include "Colors.h"
+#include "AppColors.h"
 #include "ProgressUpdateUI.h"
 #include "Notifications.h"
 #include "SumatraPDF.h"
@@ -24,7 +26,9 @@
 #define PROPERTIES_TXT_DY_PADDING 2
 #define PROPERTIES_WIN_TITLE _TR("Document Properties")
 
-enum { KB = 1024, MB = 1024 * KB, GB = 1024 * MB };
+constexpr double KB = 1024;
+constexpr double MB = 1024 * 1024;
+constexpr double GB = 1024 * 1024 * 1024;
 
 class PropertyEl {
   public:
@@ -35,7 +39,7 @@ class PropertyEl {
     // A property is always in format: Name (left): Value (right)
     // (leftTxt is static, rightTxt will be freed)
     const WCHAR* leftTxt;
-    AutoFreeW rightTxt;
+    AutoFreeWstr rightTxt;
 
     // data calculated by the layout
     RectI leftPos;
@@ -47,8 +51,11 @@ class PropertyEl {
 
 class PropertiesLayout : public Vec<PropertyEl*> {
   public:
-    PropertiesLayout() : hwnd(nullptr), hwndParent(nullptr) {}
-    ~PropertiesLayout() { DeleteVecMembers(*this); }
+    PropertiesLayout() : hwnd(nullptr), hwndParent(nullptr) {
+    }
+    ~PropertiesLayout() {
+        DeleteVecMembers(*this);
+    }
 
     void AddProperty(const WCHAR* key, WCHAR* value, bool isPath = false) {
         // don't display value-less properties
@@ -170,20 +177,21 @@ static WCHAR* FormatSizeSuccint(size_t size) {
     const WCHAR* unit = nullptr;
     double s = (double)size;
 
-    if (size > GB) {
-        s /= GB;
+    if (s > GB) {
+        s = s / GB;
         unit = _TR("GB");
-    } else if (size > MB) {
-        s /= MB;
+    } else if (s > MB) {
+        s = s / MB;
         unit = _TR("MB");
     } else {
-        s /= KB;
+        s = s / KB;
         unit = _TR("KB");
     }
 
-    AutoFreeW sizestr(str::FormatFloatWithThousandSep(s));
-    if (!unit)
+    AutoFreeWstr sizestr = str::FormatFloatWithThousandSep(s);
+    if (!unit) {
         return sizestr.StealData();
+    }
     return str::Format(L"%s %s", sizestr.Get(), unit);
 }
 
@@ -191,8 +199,8 @@ static WCHAR* FormatSizeSuccint(size_t size) {
 // as "1.29 MB (1,348,258 Bytes)"
 // Caller needs to free the result
 static WCHAR* FormatFileSize(size_t size) {
-    AutoFreeW n1(FormatSizeSuccint(size));
-    AutoFreeW n2(str::FormatNumWithThousandSep(size));
+    AutoFreeWstr n1(FormatSizeSuccint(size));
+    AutoFreeWstr n2(str::FormatNumWithThousandSep(size));
 
     return str::Format(L"%s (%s %s)", n1.Get(), n2.Get(), _TR("Bytes"));
 }
@@ -224,7 +232,7 @@ PaperFormat GetPaperFormat(SizeD size) {
 
 // format page size according to locale (e.g. "29.7 x 21.0 cm" or "11.69 x 8.27 in")
 // Caller needs to free the result
-static WCHAR* FormatPageSize(BaseEngine* engine, int pageNo, int rotation) {
+static WCHAR* FormatPageSize(EngineBase* engine, int pageNo, int rotation) {
     RectD mediabox = engine->PageMediabox(pageNo);
     SizeD size = engine->Transform(mediabox, pageNo, 1.0f / engine->GetFileDPI(), rotation).Size();
 
@@ -270,14 +278,14 @@ static WCHAR* FormatPageSize(BaseEngine* engine, int pageNo, int rotation) {
     if (((int)(height * 100)) % 100 == 99)
         height += 0.01;
 
-    AutoFreeW strWidth(str::FormatFloatWithThousandSep(width));
-    AutoFreeW strHeight(str::FormatFloatWithThousandSep(height));
+    AutoFreeWstr strWidth(str::FormatFloatWithThousandSep(width));
+    AutoFreeWstr strHeight(str::FormatFloatWithThousandSep(height));
 
     return str::Format(L"%s x %s %s%s", strWidth.Get(), strHeight.Get(), unit, formatName);
 }
 
 static WCHAR* FormatPdfFileStructure(Controller* ctrl) {
-    AutoFreeW fstruct(ctrl->GetProperty(DocumentProperty::PdfFileStructure));
+    AutoFreeWstr fstruct(ctrl->GetProperty(DocumentProperty::PdfFileStructure));
     if (str::IsEmpty(fstruct.Get()))
         return nullptr;
     WStrVec parts;
@@ -302,23 +310,26 @@ static WCHAR* FormatPdfFileStructure(Controller* ctrl) {
 // returns a list of permissions denied by this document
 // Caller needs to free the result
 static WCHAR* FormatPermissions(Controller* ctrl) {
-    if (!ctrl->AsFixed())
+    if (!ctrl->AsFixed()) {
         return nullptr;
+    }
 
     WStrVec denials;
 
-    BaseEngine* engine = ctrl->AsFixed()->GetEngine();
-    if (!engine->AllowsPrinting())
+    EngineBase* engine = ctrl->AsFixed()->GetEngine();
+    if (!engine->AllowsPrinting()) {
         denials.Push(str::Dup(_TR("printing document")));
-    if (!engine->AllowsCopyingText())
+    }
+    if (!engine->AllowsCopyingText()) {
         denials.Push(str::Dup(_TR("copying text")));
+    }
 
     return denials.Join(L", ");
 }
 
 static void UpdatePropertiesLayout(PropertiesLayout* layoutData, HDC hdc, RectI* rect) {
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
-    ScopedFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
+    AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
     HGDIOBJ origFont = SelectObject(hdc, fontLeftTxt);
 
     /* calculate text dimensions for the left side */
@@ -429,15 +440,17 @@ static void GetProps(Controller* ctrl, PropertiesLayout* layoutData, bool extend
     str = ctrl->GetProperty(DocumentProperty::Copyright);
     layoutData->AddProperty(_TR("Copyright:"), str);
 
+    DisplayModel* dm = ctrl->AsFixed();
     str = ctrl->GetProperty(DocumentProperty::CreationDate);
-    if (str && ctrl->AsFixed() && EngineType::PDF == ctrl->AsFixed()->engineType)
+    if (str && dm && kindEnginePdf == dm->engineType) {
         ConvDateToDisplay(&str, PdfDateParse);
-    else
+    } else {
         ConvDateToDisplay(&str, IsoDateParse);
+    }
     layoutData->AddProperty(_TR("Created:"), str);
 
     str = ctrl->GetProperty(DocumentProperty::ModificationDate);
-    if (str && ctrl->AsFixed() && EngineType::PDF == ctrl->AsFixed()->engineType)
+    if (str && dm && kindEnginePdf == dm->engineType)
         ConvDateToDisplay(&str, PdfDateParse);
     else
         ConvDateToDisplay(&str, IsoDateParse);
@@ -455,11 +468,14 @@ static void GetProps(Controller* ctrl, PropertiesLayout* layoutData, bool extend
     str = FormatPdfFileStructure(ctrl);
     layoutData->AddProperty(_TR("PDF Optimizations:"), str);
 
-    int64_t fileSize = file::GetSize(ctrl->FilePath());
-    if (-1 == fileSize && ctrl->AsFixed()) {
-        size_t fileSizeT;
-        if (ScopedMem<unsigned char>(ctrl->AsFixed()->GetEngine()->GetFileData(&fileSizeT)))
-            fileSize = fileSizeT;
+    AutoFreeStr path = strconv::WstrToUtf8(ctrl->FilePath());
+    int64_t fileSize = file::GetSize(path.as_view());
+    if (-1 == fileSize && dm) {
+        EngineBase* engine = dm->GetEngine();
+        AutoFree d = engine->GetFileData();
+        if (!d.empty()) {
+            fileSize = d.size();
+        }
     }
     if (-1 != fileSize) {
         str = FormatFileSize((size_t)fileSize);
@@ -472,8 +488,8 @@ static void GetProps(Controller* ctrl, PropertiesLayout* layoutData, bool extend
         layoutData->AddProperty(_TR("Number of Pages:"), str);
     }
 
-    if (ctrl->AsFixed()) {
-        str = FormatPageSize(ctrl->AsFixed()->GetEngine(), ctrl->CurrentPageNo(), ctrl->AsFixed()->GetRotation());
+    if (dm) {
+        str = FormatPageSize(dm->GetEngine(), ctrl->CurrentPageNo(), dm->GetRotation());
         if (IsUIRightToLeft() && IsVistaOrGreater()) {
             // ensure that the size remains ungarbled left-to-right
             // (note: XP doesn't know about \u202A...\u202C)
@@ -526,8 +542,8 @@ void OnMenuProperties(WindowInfo* win) {
 static void DrawProperties(HWND hwnd, HDC hdc) {
     PropertiesLayout* layoutData = FindPropertyWindowByHwnd(hwnd);
 
-    ScopedFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
-    ScopedFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
+    AutoDeleteFont fontLeftTxt(CreateSimpleFont(hdc, LEFT_TXT_FONT, LEFT_TXT_FONT_SIZE));
+    AutoDeleteFont fontRightTxt(CreateSimpleFont(hdc, RIGHT_TXT_FONT, RIGHT_TXT_FONT_SIZE));
 
     HGDIOBJ origFont = SelectObject(hdc, fontLeftTxt); /* Just to remember the orig font */
 
@@ -582,10 +598,10 @@ static void CopyPropertiesToClipboard(HWND hwnd) {
         return;
 
     // concatenate all the properties into a multi-line string
-    str::Str<WCHAR> lines(256);
+    str::WStr lines(256);
     for (size_t i = 0; i < layoutData->size(); i++) {
         PropertyEl* el = layoutData->at(i);
-        lines.AppendFmt(L"%s %s\r\n", el->leftTxt, el->rightTxt);
+        lines.AppendFmt(L"%s %s\r\n", el->leftTxt, el->rightTxt.get());
     }
 
     CopyTextToClipboard(lines.LendData());

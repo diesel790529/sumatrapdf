@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 // the following are only defined if _WIN32_WINNT >= 0x0600 and we use 0x0500
@@ -28,7 +28,6 @@ void Edit_SelectAll(HWND hwnd);
 void ListBox_AppendString_NoSort(HWND hwnd, WCHAR* txt);
 
 BOOL SafeCloseHandle(HANDLE* h);
-BOOL SafeDestroyWindow(HWND* hwnd);
 void FillWndClassEx(WNDCLASSEX& wcex, const WCHAR* clsName, WNDPROC wndproc);
 void MoveWindow(HWND hwnd, RectI rect);
 void MoveWindow(HWND hwnd, RECT* r);
@@ -46,6 +45,8 @@ void LogLastError(DWORD err = 0);
 void DbgOutLastError(DWORD err = 0);
 bool RegKeyExists(HKEY keySub, const WCHAR* keyName);
 WCHAR* ReadRegStr(HKEY keySub, const WCHAR* keyName, const WCHAR* valName);
+char* ReadRegStrUtf8(HKEY keySub, const WCHAR* keyName, const WCHAR* valName);
+WCHAR* ReadRegStr2(const WCHAR* keyName, const WCHAR* valName);
 bool WriteRegStr(HKEY keySub, const WCHAR* keyName, const WCHAR* valName, const WCHAR* value);
 bool ReadRegDWORD(HKEY keySub, const WCHAR* keyName, const WCHAR* valName, DWORD& value);
 bool WriteRegDWORD(HKEY keySub, const WCHAR* keyName, const WCHAR* valName, DWORD value);
@@ -56,6 +57,7 @@ WCHAR* GetSpecialFolder(int csidl, bool createIfMissing = false);
 void DisableDataExecution();
 void RedirectIOToConsole();
 WCHAR* GetExePath();
+char* GetExePathA();
 WCHAR* GetExeDir();
 WCHAR* GetSystem32Dir();
 WCHAR* GetCurrentDir();
@@ -77,11 +79,15 @@ HFONT CreateSimpleFont(HDC hdc, const WCHAR* fontName, int fontSize);
 
 RectI ShiftRectToWorkArea(RectI rect, bool bFully = false);
 RectI GetWorkAreaRect(RectI rect);
+void LimitWindowSizeToScreen(HWND hwnd, SIZE& size);
 RectI GetFullscreenRect(HWND);
 RectI GetVirtualScreenRect();
 
 bool LaunchFile(const WCHAR* path, const WCHAR* params = nullptr, const WCHAR* verb = nullptr, bool hidden = false);
 HANDLE LaunchProcess(const WCHAR* cmdLine, const WCHAR* currDir = nullptr, DWORD flags = 0);
+bool CreateProcessHelper(const WCHAR* exe, const WCHAR* args);
+bool LaunchElevated(const WCHAR* path, const WCHAR* cmdline);
+bool IsRunningElevated();
 
 void PaintRect(HDC, const RectI&);
 void PaintLine(HDC, const RectI&);
@@ -104,14 +110,12 @@ bool IsRtl(HWND hwnd);
 void SetRtl(HWND hwnd, bool isRtl);
 RectI ChildPosWithinParent(HWND);
 HFONT GetDefaultGuiFont();
+HFONT GetDefaultGuiFont(bool bold, bool italic);
 long GetDefaultGuiFontSize();
 
-IStream* CreateStreamFromData(const void* data, size_t len);
-// TODO: remove remaining usage
-void* GetDataFromStream(IStream* stream, size_t* len, HRESULT* resOpt = nullptr);
-OwnedData GetDataFromStream(IStream* stream, HRESULT* resOpt = nullptr);
-OwnedData GetStreamOrFileData(IStream* stream, const WCHAR* filePath);
-u8* GetStreamOrFileData(IStream* stream, const WCHAR* filePath, size_t* cbCount);
+IStream* CreateStreamFromData(std::string_view);
+std::string_view GetDataFromStream(IStream* stream, HRESULT* resOpt);
+std::string_view GetStreamOrFileData(IStream* stream, const WCHAR* filePath);
 bool ReadDataFromStream(IStream* stream, void* buffer, size_t len, size_t offset = 0);
 UINT GuessTextCodepage(const char* data, size_t len, UINT defVal = CP_ACP);
 WCHAR* NormalizeString(const WCHAR* str, int /* NORM_FORM */ form);
@@ -132,12 +136,17 @@ inline bool fromBOOL(BOOL b) {
     return b ? true : false;
 }
 
+inline bool tobool(BOOL b) {
+    return b ? true : false;
+}
+
 namespace win {
 
 void ToForeground(HWND hwnd);
 
 size_t GetTextLen(HWND hwnd);
 WCHAR* GetText(HWND hwnd);
+str::Str GetTextUtf8(HWND hwnd);
 
 void SetText(HWND hwnd, const WCHAR* txt);
 void SetVisibility(HWND hwnd, bool visible);
@@ -150,23 +159,24 @@ bool SetEnabled(HMENU m, UINT id, bool isEnabled);
 void Remove(HMENU m, UINT id);
 void Empty(HMENU m);
 void SetText(HMENU m, UINT id, WCHAR* s);
-const WCHAR* ToSafeString(AutoFreeW& s);
+const WCHAR* ToSafeString(AutoFreeWstr& s);
 
 } // namespace menu
 
 } // namespace win
 
 class DoubleBuffer {
-    HWND hTarget;
-    HDC hdcCanvas, hdcBuffer;
-    HBITMAP doubleBuffer;
-    RectI rect;
+    HWND hTarget = nullptr;
+    HDC hdcCanvas = nullptr;
+    HDC hdcBuffer = nullptr;
+    HBITMAP doubleBuffer = nullptr;
+    RectI rect{};
 
   public:
     DoubleBuffer(HWND hwnd, RectI rect);
     ~DoubleBuffer();
 
-    HDC GetDC() const { return hdcBuffer ? hdcBuffer : hdcCanvas; }
+    HDC GetDC() const;
     void Flush(HDC hdc);
 };
 
@@ -202,11 +212,13 @@ COLORREF GetPixel(BitmapPixels* bitmap, int x, int y);
 void UpdateBitmapColors(HBITMAP hbmp, COLORREF textColor, COLORREF bgColor);
 unsigned char* SerializeBitmap(HBITMAP hbmp, size_t* bmpBytesOut);
 HBITMAP CreateMemoryBitmap(SizeI size, HANDLE* hDataMapping = nullptr);
+bool BlitHBITMAP(HBITMAP hbmp, HDC hdc, RectI target);
 double GetProcessRunningTime();
 
 void RunNonElevated(const WCHAR* exePath);
 void VariantInitBstr(VARIANT& urlVar, const WCHAR* s);
-char* LoadTextResource(int resId, size_t* sizeOut = nullptr);
+// TODO: this should be std::span<u8>
+std::string_view LoadDataResource(int resId);
 bool DDEExecute(const WCHAR* server, const WCHAR* topic, const WCHAR* command);
 
 void RectInflateTB(RECT& r, int top, int bottom);
@@ -222,3 +234,7 @@ bool TrackMouseLeave(HWND);
 
 void TriggerRepaint(HWND);
 POINT GetCursorPosInHwnd(HWND);
+HINSTANCE GetInstance();
+void hwndDpiAdjust(HWND hwnd, float* x, float* y);
+SIZE ButtonGetIdealSize(HWND hwnd);
+std::tuple<const char*, DWORD, HGLOBAL> LockDataResource(int id);

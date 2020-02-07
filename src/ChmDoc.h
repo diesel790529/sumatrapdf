@@ -1,8 +1,8 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 class ChmDoc {
-    struct chmFile* chmHandle;
+    struct chmFile* chmHandle = nullptr;
 
     // Data parsed from /#WINDOWS, /#STRINGS, /#SYSTEM files inside CHM file
     AutoFree title;
@@ -10,7 +10,7 @@ class ChmDoc {
     AutoFree indexPath;
     AutoFree homePath;
     AutoFree creator;
-    UINT codepage;
+    UINT codepage = 0;
 
     void ParseWindowsData();
     bool ParseSystemData();
@@ -20,11 +20,11 @@ class ChmDoc {
     bool Load(const WCHAR* fileName);
 
   public:
-    ChmDoc() : chmHandle(nullptr), codepage(0) {}
+    ChmDoc() = default;
     ~ChmDoc();
 
     bool HasData(const char* fileName);
-    unsigned char* GetData(const char* fileName, size_t* lenOut);
+    std::string_view GetData(const char* fileName);
     char* ResolveTopicID(unsigned int id);
 
     char* ToUtf8(const unsigned char* text, UINT overrideCP = 0);

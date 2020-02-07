@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 class FrameSite;
@@ -19,16 +19,17 @@ class HtmlWindowCallback {
 
     // allows for providing data for a given url.
     // returning nullptr means data wasn't provided.
-    virtual const unsigned char* GetDataForUrl(const WCHAR* url, size_t* len) = 0;
+    virtual std::string_view GetDataForUrl(const WCHAR* url) = 0;
 
     // called when left mouse button is clicked in the web control window.
     // we use it to maintain proper focus (since it's stolen by left click)
     virtual void OnLButtonDown() = 0;
 
     // called when a file can't be displayed and has to be downloaded instead
-    virtual void DownloadData(const WCHAR* url, const unsigned char* data, size_t len) = 0;
+    virtual void DownloadData(const WCHAR* url, std::string_view data) = 0;
 
-    virtual ~HtmlWindowCallback() {}
+    virtual ~HtmlWindowCallback() {
+    }
 };
 
 // HtmlWindow embeds a web browser (Internet Explorer) control
@@ -53,7 +54,7 @@ class HtmlWindow {
     DWORD adviseCookie;
     bool blankWasShown;
 
-    AutoFreeW currentURL;
+    AutoFreeWstr currentURL;
 
     HtmlWindow(HWND hwndParent, HtmlWindowCallback* cb);
 

@@ -1,9 +1,9 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
 License: Simplified BSD (see COPYING.BSD) */
 
-#include "BaseUtil.h"
-#include "WinDynCalls.h"
-#include "WinUtil.h"
+#include "utils/BaseUtil.h"
+#include "utils/WinDynCalls.h"
+#include "utils/WinUtil.h"
 
 #define API_DECLARATION(name) Sig_##name Dyn##name = nullptr;
 
@@ -11,7 +11,6 @@ KERNEL32_API_LIST(API_DECLARATION)
 NTDLL_API_LIST(API_DECLARATION)
 UXTHEME_API_LIST(API_DECLARATION)
 NORMALIZ_API_LIST(API_DECLARATION)
-KTMW32_API_LIST(API_DECLARATION)
 USER32_API_LIST(API_DECLARATION)
 DWMAPI_API_LIST(API_DECLARATION)
 UIA_API_LIST(API_DECLARATION)
@@ -61,11 +60,6 @@ void InitDynCalls() {
     h = SafeLoadLibrary(L"normaliz.dll");
     if (h) {
         NORMALIZ_API_LIST(API_LOAD);
-    }
-
-    h = SafeLoadLibrary(L"ktmw32.dll");
-    if (h) {
-        KTMW32_API_LIST(API_LOAD);
     }
 
     h = SafeLoadLibrary(L"uiautomationcore.dll");

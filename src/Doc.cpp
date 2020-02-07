@@ -1,14 +1,16 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
 #include "utils/Archive.h"
+#include "utils/GdiPlusUtil.h"
 #include "utils/HtmlParserLookup.h"
 #include "utils/HtmlPullParser.h"
 #include "mui/Mui.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "EbookDoc.h"
 #include "MobiDoc.h"
@@ -34,7 +36,8 @@ Doc& Doc::operator=(const Doc& other) {
     return *this;
 }
 
-Doc::~Doc() {}
+Doc::~Doc() {
+}
 
 // delete underlying object
 void Doc::Delete() {

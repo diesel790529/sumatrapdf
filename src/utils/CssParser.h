@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #define Tag_Any ((HtmlTag)-1)
@@ -34,7 +34,8 @@ class CssPullParser {
 
   public:
     CssPullParser(const char* s, size_t len)
-        : s(s), currPos(s), end(s + len), inProps(false), inlineStyle(false), currSel(nullptr) {}
+        : s(s), currPos(s), end(s + len), inProps(false), inlineStyle(false), currSel(nullptr) {
+    }
 
     // call NextRule first for parsing a style element and
     // NextProperty only for parsing a single style attribute

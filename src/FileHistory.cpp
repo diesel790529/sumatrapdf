@@ -1,11 +1,12 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
 License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/FileUtil.h"
 #include "utils/ScopedWin.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "SettingsStructs.h"
 #include "FileHistory.h"
 #include "GlobalPrefs.h"
@@ -45,7 +46,7 @@ static int cmpOpenCount(const void* a, const void* b) {
         return dsA->isPinned ? -1 : 1;
     // sort pinned documents alphabetically
     if (dsA->isPinned)
-        return str::CmpNatural(path::GetBaseName(dsA->filePath), path::GetBaseName(dsB->filePath));
+        return str::CmpNatural(path::GetBaseNameNoFree(dsA->filePath), path::GetBaseNameNoFree(dsB->filePath));
     // sort often opened documents first
     if (dsA->openCount != dsB->openCount)
         return dsB->openCount - dsA->openCount;

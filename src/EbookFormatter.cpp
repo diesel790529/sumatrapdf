@@ -1,16 +1,18 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
 #include "utils/ScopedWin.h"
+#include "utils/GdiPlusUtil.h"
+#include "utils/WinUtil.h"
 
 #include "utils/Archive.h"
-#include "utils/GdiPlusUtil.h"
 #include "utils/HtmlParserLookup.h"
 #include "utils/HtmlPullParser.h"
 #include "mui/Mui.h"
 
-#include "BaseEngine.h"
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "EbookBase.h"
 #include "EbookDoc.h"
 #include "MobiDoc.h"
@@ -171,26 +173,30 @@ void EpubFormatter::HandleTagLink(HtmlToken* t) {
 
     AutoFree src(str::DupN(attr->val, attr->valLen));
     url::DecodeInPlace(src);
-    OwnedData data(epubDoc->GetFileData(src, pagePath));
+    AutoFree data(epubDoc->GetFileData(src, pagePath));
     if (data.data) {
-        ParseStyleSheet(data.data, data.size);
+        ParseStyleSheet(data.data, data.size());
     }
 }
 
 void EpubFormatter::HandleTagSvgImage(HtmlToken* t) {
     CrashIf(!epubDoc);
-    if (t->IsEndTag())
+    if (t->IsEndTag()) {
         return;
-    if (!tagNesting.Contains(Tag_Svg) && Tag_Svg_Image != t->tag)
+    }
+    if (!tagNesting.Contains(Tag_Svg) && Tag_Svg_Image != t->tag) {
         return;
+    }
     AttrInfo* attr = t->GetAttrByNameNS("href", "http://www.w3.org/1999/xlink");
-    if (!attr)
+    if (!attr) {
         return;
+    }
     AutoFree src(str::DupN(attr->val, attr->valLen));
     url::DecodeInPlace(src);
     ImageData* img = epubDoc->GetImageData(src, pagePath);
-    if (img)
+    if (img) {
         EmitImage(img);
+    }
 }
 
 void EpubFormatter::HandleHtmlTag(HtmlToken* t) {
@@ -332,10 +338,10 @@ void HtmlFileFormatter::HandleTagLink(HtmlToken* t) {
     if (!attr)
         return;
 
-    size_t len;
     AutoFree src(str::DupN(attr->val, attr->valLen));
     url::DecodeInPlace(src);
-    AutoFree data(htmlDoc->GetFileData(src, &len));
-    if (data)
-        ParseStyleSheet(data, len);
+    AutoFree data(htmlDoc->GetFileData(src));
+    if (data.data) {
+        ParseStyleSheet(data.data, data.size());
+    }
 }

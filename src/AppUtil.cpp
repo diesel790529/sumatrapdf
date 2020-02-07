@@ -1,12 +1,14 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
-// utils
 #include "utils/BaseUtil.h"
 #include "utils/FileUtil.h"
+#include "utils/WinUtil.h"
+
 // this file should have no further dependencies on src/* so that adding
 // unit tests for its content doesn't require for half of SumatraPDF
 // to be included (helpers with dependencies belong into AppTools.cpp)
+#include "SumatraConfig.h"
 #include "AppUtil.h"
 
 // the only valid chars are 0-9, . and newlines.
@@ -86,7 +88,7 @@ bool AdjustVariableDriveLetter(WCHAR* path) {
 // non-file URL in plugin mode, or if they're marked as being from
 // an untrusted zone (e.g. by the browser that's downloaded them)
 bool IsUntrustedFile(const WCHAR* filePath, const WCHAR* fileURL) {
-    AutoFreeW protocol;
+    AutoFreeWstr protocol;
     if (fileURL && str::Parse(fileURL, L"%S:", &protocol))
         if (str::Len(protocol) > 1 && !str::EqI(protocol, L"file"))
             return true;
@@ -95,7 +97,7 @@ bool IsUntrustedFile(const WCHAR* filePath, const WCHAR* fileURL) {
         return true;
 
     // check all parents of embedded files and ADSs as well
-    AutoFreeW path(str::Dup(filePath));
+    AutoFreeWstr path(str::Dup(filePath));
     while (str::Len(path) > 2 && str::FindChar(path + 2, ':')) {
         *str::FindCharLast(path, ':') = '\0';
         if (file::GetZoneIdentifier(path) >= URLZONE_INTERNET)
@@ -103,4 +105,19 @@ bool IsUntrustedFile(const WCHAR* filePath, const WCHAR* fileURL) {
     }
 
     return false;
+}
+
+void RelaunchElevatedIfNotDebug() {
+    if (gIsDebugBuild) {
+        // for easier debugging, we don't require
+        // elevation in debug build
+        return;
+    }
+    if (IsRunningElevated()) {
+        return;
+    }
+    WCHAR* exePath = GetExePath();
+    WCHAR* cmdline = GetCommandLineW(); // not owning the memory
+    LaunchElevated(exePath, cmdline);
+    ::ExitProcess(0);
 }

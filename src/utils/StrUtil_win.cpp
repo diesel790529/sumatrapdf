@@ -1,12 +1,28 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
 
 namespace str {
 
+bool IsWs(WCHAR c) {
+    return iswspace(c);
+}
+
+bool IsDigit(WCHAR c) {
+    return ('0' <= c) && (c <= '9');
+}
+
+bool IsNonCharacter(WCHAR c) {
+    return c >= 0xFFFE || (c & ~1) == 0xDFFE || (0xFDD0 <= c && c <= 0xFDEF);
+}
+
 size_t Len(const WCHAR* s) {
     return s ? wcslen(s) : 0;
+}
+
+void Free(const WCHAR* s) {
+    free((void*)s);
 }
 
 WCHAR* Dup(const WCHAR* s) {
@@ -74,6 +90,14 @@ bool EqNI(const WCHAR* s1, const WCHAR* s2, size_t len) {
     return 0 == _wcsnicmp(s1, s2, len);
 }
 
+bool IsEmpty(const WCHAR* s) {
+    return !s || (0 == *s);
+}
+
+bool StartsWith(const WCHAR* str, const WCHAR* txt) {
+    return EqN(str, txt, Len(txt));
+}
+
 /* return true if 'str' starts with 'txt', NOT case-sensitive */
 bool StartsWithI(const WCHAR* str, const WCHAR* txt) {
     if (str == txt)
@@ -101,6 +125,26 @@ bool EndsWithI(const WCHAR* txt, const WCHAR* end) {
     if (endLen > txtLen)
         return false;
     return str::EqI(txt + txtLen - endLen, end);
+}
+
+const WCHAR* FindChar(const WCHAR* str, const WCHAR c) {
+    return wcschr(str, c);
+}
+
+WCHAR* FindChar(WCHAR* str, const WCHAR c) {
+    return wcschr(str, c);
+}
+
+const WCHAR* FindCharLast(const WCHAR* str, const WCHAR c) {
+    return wcsrchr(str, c);
+}
+
+WCHAR* FindCharLast(WCHAR* str, const WCHAR c) {
+    return wcsrchr(str, c);
+}
+
+const WCHAR* Find(const WCHAR* str, const WCHAR* find) {
+    return wcsstr(str, find);
 }
 
 const WCHAR* FindI(const WCHAR* s, const WCHAR* toFind) {
@@ -158,63 +202,9 @@ WCHAR* ToLowerInPlace(WCHAR* s) {
     return res;
 }
 
-OwnedData ToMultiByte(const WCHAR* txt, UINT codePage, int cchTxtLen) {
-    CrashIf(!txt);
-    if (!txt) {
-        return {};
-    }
-
-    int requiredBufSize = WideCharToMultiByte(codePage, 0, txt, cchTxtLen, nullptr, 0, nullptr, nullptr);
-    if (0 == requiredBufSize) {
-        return {};
-    }
-    char* res = AllocArray<char>(requiredBufSize + 1);
-    if (!res) {
-        return {};
-    }
-    WideCharToMultiByte(codePage, 0, txt, cchTxtLen, res, requiredBufSize, nullptr, nullptr);
-    return OwnedData(res, requiredBufSize);
-}
-
-OwnedData ToMultiByte(const char* src, UINT codePageSrc, UINT codePageDest) {
-    CrashIf(!src);
-    if (!src) {
-        return {};
-    }
-
-    if (codePageSrc == codePageDest) {
-        return OwnedData::MakeFromStr(src);
-    }
-
-    // 20127 is US-ASCII, which by definition is valid CP_UTF8
-    // https://msdn.microsoft.com/en-us/library/windows/desktop/dd317756(v=vs.85).aspx
-    // don't know what is CP_* name for it (if it exists)
-    if ((codePageSrc == 20127) && (codePageDest == CP_UTF8)) {
-        return OwnedData::MakeFromStr(src);
-    }
-
-    AutoFreeW tmp(ToWideChar(src, codePageSrc));
-    if (!tmp) {
-        return {};
-    }
-
-    return ToMultiByte(tmp.Get(), codePageDest);
-}
-
-/* Caller needs to free() the result */
-WCHAR* ToWideChar(const char* src, UINT codePage, int cbSrcLen) {
-    CrashIf(!src);
-    if (!src)
-        return nullptr;
-
-    int requiredBufSize = MultiByteToWideChar(codePage, 0, src, cbSrcLen, nullptr, 0);
-    if (0 == requiredBufSize)
-        return nullptr;
-    WCHAR* res = AllocArray<WCHAR>(requiredBufSize + 1);
-    if (!res)
-        return nullptr;
-    MultiByteToWideChar(codePage, 0, src, cbSrcLen, res, requiredBufSize);
-    return res;
+WCHAR* ToLower(const WCHAR* s) {
+    WCHAR* s2 = str::Dup(s);
+    return ToLowerInPlace(s2);
 }
 
 bool BufFmtV(WCHAR* buf, size_t bufCchSize, const WCHAR* fmt, va_list args) {
@@ -299,12 +289,12 @@ size_t TransChars(WCHAR* str, const WCHAR* oldChars, const WCHAR* newChars) {
     return findCount;
 }
 
-// the result needs to be free()d
+// free() the result
 WCHAR* Replace(const WCHAR* s, const WCHAR* toReplace, const WCHAR* replaceWith) {
     if (!s || str::IsEmpty(toReplace) || !replaceWith)
         return nullptr;
 
-    str::Str<WCHAR> result(str::Len(s));
+    str::WStr result(str::Len(s));
     size_t findLen = str::Len(toReplace), replLen = str::Len(replaceWith);
     const WCHAR *start = s, *end;
     while ((end = str::Find(start, toReplace)) != nullptr) {
@@ -387,7 +377,7 @@ WCHAR* FormatNumWithThousandSep(size_t num, LCID locale) {
     WCHAR thousandSep[4] = {0};
     if (!GetLocaleInfo(locale, LOCALE_STHOUSAND, thousandSep, dimof(thousandSep)))
         str::BufSet(thousandSep, dimof(thousandSep), L",");
-    AutoFreeW buf(str::Format(L"%Iu", num));
+    AutoFreeWstr buf(str::Format(L"%Iu", num));
 
     size_t resLen = str::Len(buf) + str::Len(thousandSep) * (str::Len(buf) + 3) / 3 + 1;
     WCHAR* res = AllocArray<WCHAR>(resLen);
@@ -411,13 +401,13 @@ WCHAR* FormatNumWithThousandSep(size_t num, LCID locale) {
 WCHAR* FormatFloatWithThousandSep(double number, LCID locale) {
     size_t num = (size_t)(number * 100 + 0.5);
 
-    AutoFreeW tmp(FormatNumWithThousandSep(num / 100, locale));
+    AutoFreeWstr tmp(FormatNumWithThousandSep(num / 100, locale));
     WCHAR decimal[4];
     if (!GetLocaleInfo(locale, LOCALE_SDECIMAL, decimal, dimof(decimal)))
         str::BufSet(decimal, dimof(decimal), L".");
 
     // always add between one and two decimals after the point
-    AutoFreeW buf(str::Format(L"%s%s%02d", tmp, decimal, num % 100));
+    AutoFreeWstr buf(str::Format(L"%s%s%02d", tmp.get(), decimal, num % 100));
     if (str::EndsWith(buf, L"0"))
         buf[str::Len(buf) - 1] = '\0';
 
@@ -565,7 +555,7 @@ const WCHAR* Parse(const WCHAR* str, const WCHAR* format, ...) {
         else if ('s' == *f)
             *va_arg(args, WCHAR**) = ExtractUntil(str, *(f + 1), &end);
         else if ('S' == *f)
-            va_arg(args, AutoFreeW*)->Set(ExtractUntil(str, *(f + 1), &end));
+            va_arg(args, AutoFreeWstr*)->Set(ExtractUntil(str, *(f + 1), &end));
         else if ('$' == *f && !*str)
             continue; // don't fail, if we're indeed at the end of the string
         else if ('%' == *f && *f == *str)
@@ -598,82 +588,6 @@ Failure:
     return nullptr;
 }
 
-size_t Utf8ToWcharBuf(const char* s, size_t cbLen, WCHAR* bufOut, size_t cchBufOutSize) {
-    CrashIf(!bufOut || (0 == cchBufOutSize));
-    int cchConverted = MultiByteToWideChar(CP_UTF8, 0, s, (int)cbLen, bufOut, (int)cchBufOutSize);
-    if (0 == cchConverted) {
-        // TODO: determine ideal string length so that the conversion succeeds
-        cchConverted = MultiByteToWideChar(CP_UTF8, 0, s, (int)cchBufOutSize / 2, bufOut, (int)cchBufOutSize);
-    } else if ((size_t)cchConverted >= cchBufOutSize) {
-        cchConverted = (int)cchBufOutSize - 1;
-    }
-    bufOut[cchConverted] = '\0';
-    return cchConverted;
-}
-
-size_t WcharToUtf8Buf(const WCHAR* s, char* bufOut, size_t cbBufOutSize) {
-    CrashIf(!bufOut || (0 == cbBufOutSize));
-    int cbConverted = WideCharToMultiByte(CP_UTF8, 0, s, -1, nullptr, 0, nullptr, nullptr);
-    if ((size_t)cbConverted >= cbBufOutSize)
-        cbConverted = (int)cbBufOutSize - 1;
-    int res = WideCharToMultiByte(CP_UTF8, 0, s, (int)str::Len(s), bufOut, cbConverted, nullptr, nullptr);
-    CrashIf(res > cbConverted);
-    bufOut[res] = '\0';
-    return res;
-}
-
-namespace conv {
-
-// tries to convert a string in unknown encoding to utf8, as best
-// as it cans
-// As an optimization, can return src if the string already is
-// valid utf8. Otherwise returns a copy of the string and the
-// caller has to free() it
-MaybeOwnedData UnknownToUtf8(const std::string_view& txt) {
-    size_t len = txt.size();
-    const char* s = txt.data();
-
-    if (len < 3) {
-        return MaybeOwnedData((char*)s, len, false);
-    }
-
-    if (str::StartsWith(s, UTF8_BOM)) {
-        return MaybeOwnedData(str::Dup(s + 3), len - 3, false);
-    }
-
-    // TODO: UTF16BE_BOM
-
-    if (str::StartsWith(s, UTF16_BOM)) {
-        s += 2;
-        int cchLen = (int)((len - 2) / 2);
-        OwnedData d = str::conv::ToUtf8((const WCHAR*)s, cchLen);
-        size_t n = d.size;
-        auto* str = d.StealData();
-        return MaybeOwnedData(str, n, true);
-    }
-
-    // if s is valid utf8, leave it alone
-    const u8* tmp = (const u8*)s;
-    if (isLegalUTF8String(&tmp, tmp + len)) {
-        return MaybeOwnedData((char*)s, len, false);
-    }
-
-    AutoFreeW uni(str::conv::FromAnsi(s, len));
-    OwnedData d = str::conv::ToUtf8(uni.Get());
-    size_t n = d.size;
-    auto* str = d.StealData();
-    return MaybeOwnedData(str, n, true);
-}
-
-size_t ToCodePageBuf(char* buf, int cbBufSize, const WCHAR* s, UINT cp) {
-    return WideCharToMultiByte(cp, 0, s, -1, buf, cbBufSize, nullptr, nullptr);
-}
-size_t FromCodePageBuf(WCHAR* buf, int cchBufSize, const char* s, UINT cp) {
-    return MultiByteToWideChar(cp, 0, s, -1, buf, cchBufSize);
-}
-
-} // namespace conv
-
 } // namespace str
 
 namespace url {
@@ -689,7 +603,7 @@ void DecodeInPlace(WCHAR* url) {
         return;
     }
     // URLs are usually UTF-8 encoded
-    OwnedData urlUtf8(str::conv::ToUtf8(url));
+    AutoFree urlUtf8(strconv::WstrToUtf8(url));
     DecodeInPlace(urlUtf8.Get());
     // convert back in place
     CrashIf(str::Len(url) >= INT_MAX);
@@ -704,7 +618,7 @@ WCHAR* GetFullPath(const WCHAR* url) {
 }
 
 WCHAR* GetFileName(const WCHAR* url) {
-    AutoFreeW path(str::Dup(url));
+    AutoFreeWstr path(str::Dup(url));
     str::TransChars(path, L"#?", L"\0\0");
     WCHAR* base = path + str::Len(path);
     for (; base > path; base--) {

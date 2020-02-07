@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 /*
@@ -28,6 +28,8 @@ understand.
 #include "utils/GdiPlusUtil.h"
 #include "SvgPath.h"
 #include "utils/VecSegmented.h"
+
+using namespace Gdiplus;
 
 namespace svg {
 
@@ -60,7 +62,8 @@ enum class PathInstr {
 static char* instructions = "MmLlHhVvCcSsQqTtAaZz";
 
 struct SvgPathInstr {
-    SvgPathInstr(PathInstr type) : type(type) {}
+    SvgPathInstr(PathInstr type) : type(type) {
+    }
 
     PathInstr type;
     // the meaning of values depends on InstrType. We could be more safe

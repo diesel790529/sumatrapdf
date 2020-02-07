@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -6,7 +6,9 @@
 #include <UIAutomationCoreApi.h>
 #include <OleAcc.h>
 #include "utils/ScopedWin.h"
-#include "BaseEngine.h"
+
+#include "wingui/TreeModel.h"
+#include "EngineBase.h"
 #include "SettingsStructs.h"
 #include "Controller.h"
 #include "EngineManager.h"
@@ -224,7 +226,7 @@ HRESULT STDMETHODCALLTYPE SumatraUIAutomationDocumentProvider::GetPropertyValue(
     if (propertyId == UIA_NamePropertyId) {
         // typically filename
         pRetVal->vt = VT_BSTR;
-        pRetVal->bstrVal = SysAllocString(path::GetBaseName(dm->GetEngine()->FileName()));
+        pRetVal->bstrVal = SysAllocString(path::GetBaseNameNoFree(dm->GetEngine()->FileName()));
         return S_OK;
     } else if (propertyId == UIA_IsTextPatternAvailablePropertyId) {
         pRetVal->vt = VT_BOOL;

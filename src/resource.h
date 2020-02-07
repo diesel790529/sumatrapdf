@@ -4,6 +4,7 @@
 //
 #define IDI_SUMATRAPDF                  1
 #define IDI_PDFDOC                      2
+#define IDI_RAMICRO                     3
 #define IDD_DIALOG_GOTO_PAGE            129
 #define IDD_DIALOG_GET_PASSWORD         130
 #define IDD_DIALOG_PDF_ASSOCIATE        131
@@ -11,7 +12,7 @@
 #define IDD_DIALOG_CHANGE_LANGUAGE      134
 #define IDD_DIALOG_NEW_VERSION          135
 #define IDD_DIALOG_SETTINGS             136
-#define IDD_DIALOG_FIND                 137
+#define IDD_DIALOG_FIND                 137 
 #define IDD_DIALOG_CUSTOM_ZOOM          138
 #define IDD_PROPSHEET_PRINT_ADVANCED    139
 #define IDD_DIALOG_FAV_ADD              140
@@ -19,6 +20,7 @@
 #define IDM_CLOSE                       401
 #define IDM_SAVEAS                      402
 #define IDM_PRINT                       403
+#define IDM_SHOW_IN_FOLDER              404
 #define IDM_EXIT                        405
 #define IDM_REFRESH                     406
 #define IDM_SAVEAS_BOOKMARK             407
@@ -38,6 +40,8 @@
 #define IDM_VIEW_FULLSCREEN             421
 #define IDM_SELECT_ALL                  422
 #define IDM_VIEW_SHOW_HIDE_MENUBAR      423
+#define IDM_NEW_WINDOW                  424
+#define IDM_DUPLICATE_IN_NEW_WINDOW     425
 #define IDM_COPY_IMAGE                  427
 #define IDM_COPY_LINK_TARGET            428
 #define IDM_COPY_COMMENT                429
@@ -50,6 +54,7 @@
 #define IDM_FIND_NEXT                   436
 #define IDM_FIND_PREV                   437
 #define IDM_FIND_MATCH                  438
+#define IDM_SAVE_ANNOTATIONS_SMX        439
 #define IDM_ZOOM_FIT_PAGE               440
 #define IDM_ZOOM_ACTUAL_SIZE            441
 #define IDM_ZOOM_FIT_WIDTH              442
@@ -81,6 +86,13 @@
 #define IDM_OPEN_WITH_EXTERNAL_LAST     509
 #define IDM_FILE_HISTORY_FIRST          510
 #define IDM_FILE_HISTORY_LAST           519
+
+#define IDM_EXPAND_ALL                  525
+#define IDM_COLLAPSE_ALL                526
+#define IDM_EXPORT_BOOKMARKS            527
+#define IDM_NEW_BOOKMARKS               528
+#define IDM_SEPARATOR                   530
+
 #define IDM_VISIT_WEBSITE               550
 #define IDM_ABOUT                       551
 #define IDM_OPTIONS                     552
@@ -93,16 +105,19 @@
 #define IDM_FAV_ADD                     560
 #define IDM_FAV_DEL                     561
 #define IDM_FAV_TOGGLE                  562
+#define IDM_FAV_SHOW                    563
+#define IDM_FAV_HIDE                    564
 #define IDM_RENAME_FILE                 580
 #define IDM_FIND_NEXT_SEL               581
 #define IDM_FIND_PREV_SEL               582
-#define IDM_DEBUG_SHOW_LINKS            590
-#define IDM_DEBUG_CRASH_ME              592
-#define IDM_LOAD_MOBI_SAMPLE            593
-#define IDM_DEBUG_EBOOK_UI              594
-#define IDM_DEBUG_MUI                   595
-#define IDM_DEBUG_ANNOTATION            596
-#define IDM_ADVANCED_OPTIONS            597
+#define IDM_DEBUG_SHOW_LINKS            585
+#define IDM_DEBUG_CRASH_ME              586
+#define IDM_LOAD_MOBI_SAMPLE            587
+#define IDM_DEBUG_EBOOK_UI              588
+#define IDM_DEBUG_MUI                   589
+#define IDM_DEBUG_ANNOTATION            590
+#define IDM_DEBUG_DOWNLOAD_SYMBOLS      591
+#define IDM_ADVANCED_OPTIONS            596
 #define IDM_FAV_FIRST                   600
 #define IDM_FAV_LAST                    800
 #define IDM_CHANGE_THEME_FIRST          900
@@ -156,7 +171,6 @@
 #define IDC_SECTION_PRINT_COMPATIBILITY 1070
 #define IDC_TOC_BOX                     1100
 #define IDC_TOC_LABEL_WITH_CLOSE        1101
-#define IDC_TOC_TREE                    1102
 #define IDC_FAV_BOX                     1105
 #define IDC_FAV_LABEL_WITH_CLOSE        1106
 #define IDC_FAV_TREE                    1107
@@ -192,7 +206,10 @@
 #define IDT_FILE_ADDTOFAV               3025
 #define IDT_VIEW_FIT_WIDTH              3026
 #define IDT_VIEW_FIT_PAGE               3027
+
 #define IDD_PUBLIC_APP_KEY              3060
+#define IDD_RAMICRO_SPLASH              3061
+
 #define IDC_SUMATRAPDF                  4000
 #define IDC_STATIC                      -1
 

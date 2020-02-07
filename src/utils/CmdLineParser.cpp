@@ -1,8 +1,8 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
-#include "BaseUtil.h"
-#include "CmdLineParser.h"
+#include "utils/BaseUtil.h"
+#include "utils/CmdLineParser.h"
 
 // Parses a command line according to the specification at
 // http://msdn.microsoft.com/en-us/library/17w5ykft.aspx :
@@ -15,7 +15,7 @@ void ParseCmdLine(const WCHAR* cmdLine, WStrVec& out, int maxParts) {
     if (!cmdLine)
         return;
 
-    str::Str<WCHAR> arg(MAX_PATH / 2);
+    str::WStr arg(MAX_PATH / 2);
     const WCHAR* s;
 
     while (--maxParts != 0) {

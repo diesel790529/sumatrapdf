@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 // note: include BaseUtil.h instead of including directly
@@ -14,31 +14,40 @@ not useful for other types, the code is simpler if we always do it
 */
 template <typename T>
 class Vec {
-  protected:
+  public:
     static const size_t PADDING = 1;
 
-    size_t len;
-    size_t cap;
-    size_t capacityHint;
-    T* els;
+    size_t len = 0;
+    size_t cap = 0;
+    size_t capacityHint = 0;
+    T* els = nullptr;
     T buf[16];
-    Allocator* allocator;
+    Allocator* allocator = nullptr;
+    // don't crash if we run out of memory
+    bool allowFailure = false;
 
-    bool EnsureCapTry(size_t needed) {
-        if (cap >= needed)
+  protected:
+    bool EnsureCap(size_t needed) {
+        if (cap >= needed) {
             return true;
+        }
 
         size_t newCap = cap * 2;
-        if (needed > newCap)
+        if (needed > newCap) {
             newCap = needed;
-        if (newCap < capacityHint)
+        }
+        if (newCap < capacityHint) {
             newCap = capacityHint;
+        }
 
         size_t newElCount = newCap + PADDING;
-        if (newElCount >= SIZE_MAX / sizeof(T))
+        if (newElCount >= SIZE_MAX / sizeof(T)) {
             return false;
-        if (newElCount > INT_MAX) // limitation of Vec::Find
+        }
+        if (newElCount > INT_MAX) {
+            // limitation of Vec::Find
             return false;
+        }
 
         size_t allocSize = newElCount * sizeof(T);
         size_t newPadding = allocSize - len * sizeof(T);
@@ -49,6 +58,7 @@ class Vec {
             newEls = (T*)Allocator::Realloc(allocator, els, allocSize);
         }
         if (!newEls) {
+            CrashAlwaysIf(!allowFailure);
             return false;
         }
         els = newEls;
@@ -57,17 +67,12 @@ class Vec {
         return true;
     }
 
-    void EnsureCapCrash(size_t needed) {
-        bool ok = EnsureCapTry(needed);
-        CrashAlwaysIf(!ok);
-    }
-
-    T* MakeSpaceAt(size_t idx, size_t count, bool allowFailure = false) {
+    T* MakeSpaceAt(size_t idx, size_t count) {
         size_t newLen = std::max(len, idx) + count;
-        if (!allowFailure)
-            EnsureCapCrash(newLen);
-        else if (!EnsureCapTry(newLen))
+        bool ok = EnsureCap(newLen);
+        if (!ok) {
             return nullptr;
+        }
         T* res = &(els[idx]);
         if (len > idx) {
             T* src = els + idx;
@@ -90,15 +95,17 @@ class Vec {
         Reset();
     }
 
-    ~Vec() { FreeEls(); }
+    ~Vec() {
+        FreeEls();
+    }
 
     // ensure that a Vec never shares its els buffer with another after a clone/copy
     // note: we don't inherit allocator as it's not needed for our use cases
-    Vec(const Vec& orig) : capacityHint(0), allocator(nullptr) {
+    Vec(const Vec& orig) {
         els = buf;
         Reset();
-        EnsureCapCrash(orig.cap);
-        // use memcpy, as Vec only supports POD types
+        EnsureCap(orig.cap);
+        // using memcpy, as Vec only supports POD types
         memcpy(els, orig.els, sizeof(T) * (len = orig.len));
     }
 
@@ -114,16 +121,22 @@ class Vec {
 
     Vec& operator=(const Vec& that) {
         if (this != &that) {
-            EnsureCapCrash(that.cap);
-            // use memcpy, as Vec only supports POD types
+            EnsureCap(that.cap);
+            // using memcpy, as Vec only supports POD types
             memcpy(els, that.els, sizeof(T) * (len = that.len));
             memset(els + len, 0, sizeof(T) * (cap - len));
         }
         return *this;
     }
 
-    T& operator[](size_t idx) {
+    [[nodiscard]] T& operator[](size_t idx) const {
         CrashIf(idx >= len);
+        return els[idx];
+    }
+
+    [[nodiscard]] T& operator[](int idx) const {
+        CrashIf(idx < 0);
+        CrashIf((size_t)idx >= len);
         return els[idx];
     }
 
@@ -135,36 +148,66 @@ class Vec {
         memset(buf, 0, sizeof(buf));
     }
 
-    T& at(size_t idx) const {
+    void clear() {
+        Reset();
+    }
+
+    bool SetSize(size_t newSize) {
+        Reset();
+        return MakeSpaceAt(0, newSize);
+    }
+
+    [[nodiscard]] T& at(size_t idx) const {
         CrashIf(idx >= len);
         return els[idx];
     }
 
-    size_t size() const { return len; }
-
-    void InsertAt(size_t idx, const T& el) { MakeSpaceAt(idx, 1)[0] = el; }
-
-    void Append(const T& el) { InsertAt(len, el); }
-
-    void Append(const T* src, size_t count) {
-        if (0 == count)
-            return;
-        T* dst = MakeSpaceAt(len, count);
-        memcpy(dst, src, count * sizeof(T));
+    [[nodiscard]] T& at(int idx) const {
+        CrashIf(idx < 0);
+        CrashIf((size_t)idx >= len);
+        return els[idx];
     }
 
-    // returns false on allocation failure instead of crashing
-    bool AppendChecked(const T* src, size_t count) {
-        if (0 == count)
+    [[nodiscard]] size_t size() const {
+        return len;
+    }
+    [[nodiscard]] int isize() const {
+        return (int)len;
+    }
+
+    bool InsertAt(size_t idx, const T& el) {
+        T* p = MakeSpaceAt(idx, 1);
+        if (!p) {
+            return false;
+        }
+        p[0] = el;
+        return true;
+    }
+
+    bool Append(const T& el) {
+        return InsertAt(len, el);
+    }
+
+    bool push_back(const T& el) {
+        return InsertAt(len, el);
+    }
+
+    bool Append(const T* src, size_t count) {
+        if (0 == count) {
             return true;
-        T* dst = MakeSpaceAt(len, count, true);
-        if (dst)
-            memcpy(dst, src, count * sizeof(T));
-        return dst != nullptr;
+        }
+        T* dst = MakeSpaceAt(len, count);
+        if (!dst) {
+            return false;
+        }
+        memcpy(dst, src, count * sizeof(T));
+        return true;
     }
 
     // appends count blank (i.e. zeroed-out) elements at the end
-    T* AppendBlanks(size_t count) { return MakeSpaceAt(len, count); }
+    T* AppendBlanks(size_t count) {
+        return MakeSpaceAt(len, count);
+    }
 
     void RemoveAt(size_t idx, size_t count = 1) {
         if (len > idx + count) {
@@ -183,17 +226,21 @@ class Vec {
     // TODO: could be extend to take number of elements to remove
     void RemoveAtFast(size_t idx) {
         CrashIf(idx >= len);
-        if (idx >= len)
+        if (idx >= len) {
             return;
+        }
         T* toRemove = els + idx;
         T* last = els + len - 1;
-        if (toRemove != last)
+        if (toRemove != last) {
             memcpy(toRemove, last, sizeof(T));
+        }
         memset(last, 0, sizeof(T));
         --len;
     }
 
-    void Push(T el) { Append(el); }
+    bool Push(T el) {
+        return Append(el);
+    }
 
     T Pop() {
         CrashIf(0 == len);
@@ -209,7 +256,7 @@ class Vec {
         return el;
     }
 
-    T& Last() const {
+    [[nodiscard]] T& Last() const {
         CrashIf(0 == len);
         return at(len - 1);
     }
@@ -218,7 +265,7 @@ class Vec {
     // without duplicate allocation. Note: since Vec over-allocates, this
     // is likely to use more memory than strictly necessary, but in most cases
     // it doesn't matter
-    T* StealData() {
+    [[nodiscard]] T* StealData() {
         T* res = els;
         if (els == buf) {
             res = (T*)Allocator::MemDup(allocator, buf, (len + PADDING) * sizeof(T));
@@ -228,28 +275,36 @@ class Vec {
         return res;
     }
 
-    T* LendData() const { return els; }
+    [[nodiscard]] T* LendData() const {
+        return els;
+    }
 
-    int Find(T el, size_t startAt = 0) const {
+    [[nodiscard]] int Find(T el, size_t startAt = 0) const {
         for (size_t i = startAt; i < len; i++) {
-            if (els[i] == el)
+            if (els[i] == el) {
                 return (int)i;
+            }
         }
         return -1;
     }
 
-    bool Contains(T el) const { return -1 != Find(el); }
-
-    // returns true if removed
-    bool Remove(T el) {
-        int i = Find(el);
-        if (-1 == i)
-            return false;
-        RemoveAt(i);
-        return true;
+    [[nodiscard]] bool Contains(T el) const {
+        return -1 != Find(el);
     }
 
-    void Sort(int (*cmpFunc)(const void* a, const void* b)) { qsort(els, len, sizeof(T), cmpFunc); }
+    // returns position of removed element or -1 if not removed
+    int Remove(T el) {
+        int i = Find(el);
+        if (-1 == i) {
+            return -1;
+        }
+        RemoveAt(i);
+        return i;
+    }
+
+    void Sort(int (*cmpFunc)(const void* a, const void* b)) {
+        qsort(els, len, sizeof(T), cmpFunc);
+    }
 
     void Reverse() {
         for (size_t i = 0; i < len / 2; i++) {
@@ -259,30 +314,34 @@ class Vec {
 
     T& FindEl(const std::function<bool(T&)>& check) {
         for (size_t i = 0; i < len; i++) {
-            if (check(els[i]))
+            if (check(els[i])) {
                 return els[i];
+            }
         }
         return els[len]; // nullptr-sentinel
     }
 
-    // cf. http://www.cprogramming.com/c++11/c++11-ranged-for-loop.html
-    class Iter {
-        Vec<T>* vec;
-        size_t pos;
+    [[nodiscard]] bool empty() const {
+        return len == 0;
+    }
 
-      public:
-        Iter(Vec<T>* vec, size_t pos) : vec(vec), pos(pos) {}
+    // http://www.cprogramming.com/c++11/c++11-ranged-for-loop.html
+    // https://stackoverflow.com/questions/16504062/how-to-make-the-for-each-loop-function-in-c-work-with-a-custom-class
+    typedef T* iterator;
+    typedef const T* const_iterator;
 
-        bool operator!=(const Iter& other) const { return pos != other.pos; }
-        T& operator*() const { return vec->at(pos); }
-        Iter& operator++() {
-            pos++;
-            return *this;
-        }
-    };
-
-    Iter begin() { return Iter(this, 0); }
-    Iter end() { return Iter(this, len); }
+    iterator begin() {
+        return &(els[0]);
+    }
+    const_iterator begin() const {
+        return &(els[0]);
+    }
+    iterator end() {
+        return &(els[len]);
+    }
+    const_iterator end() const {
+        return &(els[len]);
+    }
 };
 
 // only suitable for T that are pointers to C++ objects
@@ -294,77 +353,195 @@ inline void DeleteVecMembers(Vec<T>& v) {
     v.Reset();
 }
 
-template <typename T>
-inline void DeleteVecMembers(std::vector<T>& v) {
-    for (T& el : v) {
-        delete el;
-    }
-    v.clear();
-}
-
 namespace str {
 
-template <typename T>
-class Str : public Vec<T> {
+class WStr : public Vec<WCHAR> {
   public:
-    explicit Str(size_t capHint = 0, Allocator* allocator = nullptr) : Vec<T>(capHint, allocator) {}
-
-    void Append(T c) { Vec<T>::InsertAt(Vec<T>::len, c); }
-
-    // only valid for T = char
-    std::string_view AsView() const { return {this->Get(), this->size()}; }
-
-    void Append(const T* src, size_t size = -1) {
-        if ((size_t)-1 == size)
-            size = Len(src);
-        Vec<T>::Append(src, size);
+    explicit WStr(size_t capHint = 0, Allocator* allocator = nullptr) {
+        this->capacityHint = capHint;
+        this->allocator = allocator;
     }
 
-    void AppendFmt(const T* fmt, ...) {
+    WStr(std::wstring_view s) {
+        AppendView(s);
+    }
+
+    void Append(WCHAR c) {
+        InsertAt(len, c);
+    }
+
+    std::wstring_view AsView() const {
+        return {this->Get(), this->size()};
+    }
+
+    std::wstring_view as_view() const {
+        return {this->Get(), this->size()};
+    }
+
+    void Append(const WCHAR* src, size_t size = -1) {
+        if ((size_t)-1 == size) {
+            size = Len(src);
+        }
+        Vec<WCHAR>::Append(src, size);
+    }
+
+    void AppendView(const std::wstring_view sv) {
+        this->Append(sv.data(), sv.size());
+    }
+
+    void AppendFmt(const WCHAR* fmt, ...) {
         va_list args;
         va_start(args, fmt);
-        T* res = FmtV(fmt, args);
+        WCHAR* res = FmtV(fmt, args);
         AppendAndFree(res);
         va_end(args);
     }
 
-    void AppendAndFree(T* s) {
-        if (s)
+    void AppendAndFree(WCHAR* s) {
+        if (s) {
             Append(s);
+        }
         free(s);
     }
 
     // returns true if was replaced
-    bool Replace(const T* toReplace, const T* replaceWith) {
+    // TODO: should be a stand-alone function
+    bool Replace(const WCHAR* toReplace, const WCHAR* replaceWith) {
         // fast path: nothing to replace
-        if (!str::Find(Vec<T>::els, toReplace))
+        if (!str::Find(els, toReplace)) {
             return false;
-        char* newStr = str::Replace(Vec<T>::els, toReplace, replaceWith);
-        Vec<T>::Reset();
+        }
+        WCHAR* newStr = str::Replace(els, toReplace, replaceWith);
+        Reset();
         AppendAndFree(newStr);
         return true;
     }
 
-    void Set(const T* s) {
-        Vec<T>::Reset();
+    void Set(std::wstring s) {
+        Reset();
+        AppendView(s);
+    }
+
+    void Set(const WCHAR* s) {
+        Reset();
         Append(s);
     }
 
-    T* Get() const { return Vec<T>::els; }
+    WCHAR* Get() const {
+        return els;
+    }
 
-    T LastChar() const {
+    // for compat with std::wstring
+    WCHAR* c_str() const {
+        return els;
+    }
+
+    // for compat with std::wstring
+    WCHAR* data() const {
+        return els;
+    }
+
+    WCHAR LastChar() const {
         auto n = this->len;
         if (n == 0) {
             return 0;
         }
         return at(n - 1);
     }
+};
 
-    // only available for T = char
-    OwnedData StealAsOwnedData() {
-        char* s = this->StealData();
-        size_t size = this->size();
-        return OwnedData(s, size);
+class Str : public Vec<char> {
+  public:
+    explicit Str(size_t capHint = 0, Allocator* allocator = nullptr) {
+        this->capacityHint = capHint;
+        this->allocator = allocator;
+    }
+
+    Str(std::string_view s) {
+        AppendView(s);
+    }
+
+    std::string_view AsView() const {
+        return {Get(), size()};
+    }
+
+    std::string_view as_view() const {
+        return {Get(), size()};
+    }
+
+    char* c_str() const {
+        return els;
+    }
+
+    std::string_view StealAsView() {
+        size_t len = size();
+        char* d = StealData();
+        return {d, len};
+    }
+
+    bool AppendChar(char c) {
+        return InsertAt(len, c);
+    }
+
+    bool Append(const char* src, size_t size = -1) {
+        if (!src) {
+            return true;
+        }
+        if ((size_t)-1 == size) {
+            size = Len(src);
+        }
+        return Vec<char>::Append(src, size);
+    }
+
+    bool AppendView(const std::string_view sv) {
+        return this->Append(sv.data(), sv.size());
+    }
+
+    void AppendFmt(const char* fmt, ...) {
+        va_list args;
+        va_start(args, fmt);
+        char* res = FmtV(fmt, args);
+        AppendAndFree(res);
+        va_end(args);
+    }
+
+    bool AppendAndFree(const char* s) {
+        if (!s) {
+            return true;
+        }
+        bool ok = Append(s);
+        str::Free(s);
+        return ok;
+    }
+
+    // returns true if was replaced
+    // TODO: should be a stand-alone function
+    bool Replace(const char* toReplace, const char* replaceWith) {
+        // fast path: nothing to replace
+        if (!str::Find(els, toReplace)) {
+            return false;
+        }
+        char* newStr = str::Replace(els, toReplace, replaceWith);
+        Reset();
+        AppendAndFree(newStr);
+        return true;
+    }
+
+    void Set(std::string_view s) {
+        Reset();
+        AppendView(s);
+    }
+
+    char* Get() const {
+        return els;
+    }
+
+    char LastChar() const {
+        auto n = this->len;
+        if (n == 0) {
+            return 0;
+        }
+        return at(n - 1);
     }
 };
 
@@ -374,7 +551,8 @@ class Str : public Vec<T> {
 // WStrVec owns the strings in the list
 class WStrVec : public Vec<WCHAR*> {
   public:
-    WStrVec() : Vec() {}
+    WStrVec() : Vec() {
+    }
     WStrVec(const WStrVec& orig) : Vec(orig) {
         // make sure not to share string pointers between StrVecs
         for (size_t i = 0; i < len; i++) {
@@ -382,7 +560,9 @@ class WStrVec : public Vec<WCHAR*> {
                 at(i) = str::Dup(at(i));
         }
     }
-    ~WStrVec() { FreeMembers(); }
+    ~WStrVec() {
+        FreeMembers();
+    }
 
     WStrVec& operator=(const WStrVec& that) {
         if (this != &that) {
@@ -396,10 +576,12 @@ class WStrVec : public Vec<WCHAR*> {
         return *this;
     }
 
-    void Reset() { FreeMembers(); }
+    void Reset() {
+        FreeMembers();
+    }
 
     WCHAR* Join(const WCHAR* joint = nullptr) {
-        str::Str<WCHAR> tmp(256);
+        str::WStr tmp(256);
         size_t jointLen = str::Len(joint);
         for (size_t i = 0; i < len; i++) {
             WCHAR* s = at(i);
@@ -419,7 +601,9 @@ class WStrVec : public Vec<WCHAR*> {
         return -1;
     }
 
-    bool Contains(const WCHAR* s) const { return -1 != Find(s); }
+    bool Contains(const WCHAR* s) const {
+        return -1 != Find(s);
+    }
 
     int FindI(const WCHAR* s, size_t startAt = 0) const {
         for (size_t i = startAt; i < len; i++) {
@@ -449,15 +633,21 @@ class WStrVec : public Vec<WCHAR*> {
         return len - start;
     }
 
-    void Sort() { Vec::Sort(cmpAscii); }
-    void SortNatural() { Vec::Sort(cmpNatural); }
+    void Sort() {
+        Vec::Sort(cmpAscii);
+    }
+    void SortNatural() {
+        Vec::Sort(cmpNatural);
+    }
 
   private:
     static int cmpNatural(const void* a, const void* b) {
         return str::CmpNatural(*(const WCHAR**)a, *(const WCHAR**)b);
     }
 
-    static int cmpAscii(const void* a, const void* b) { return wcscmp(*(const WCHAR**)a, *(const WCHAR**)b); }
+    static int cmpAscii(const void* a, const void* b) {
+        return wcscmp(*(const WCHAR**)a, *(const WCHAR**)b);
+    }
 };
 #endif
 
@@ -469,7 +659,8 @@ class WStrList {
         WCHAR* string;
         uint32_t hash;
 
-        explicit Item(WCHAR* string = nullptr, uint32_t hash = 0) : string(string), hash(hash) {}
+        explicit Item(WCHAR* string = nullptr, uint32_t hash = 0) : string(string), hash(hash) {
+        }
     };
 
     Vec<Item> items;
@@ -492,7 +683,8 @@ class WStrList {
 
   public:
     explicit WStrList(size_t capHint = 0, Allocator* allocator = nullptr)
-        : items(capHint, allocator), count(0), allocator(allocator) {}
+        : items(capHint, allocator), count(0), allocator(allocator) {
+    }
 
     ~WStrList() {
         for (Item& item : items) {
@@ -500,11 +692,17 @@ class WStrList {
         }
     }
 
-    const WCHAR* at(size_t idx) const { return items.at(idx).string; }
+    const WCHAR* at(size_t idx) const {
+        return items.at(idx).string;
+    }
 
-    const WCHAR* Last() const { return items.Last().string; }
+    const WCHAR* Last() const {
+        return items.Last().string;
+    }
 
-    size_t size() const { return count; }
+    size_t size() const {
+        return count;
+    }
 
     // str must have been allocated by allocator and is owned by StrList
     void Append(WCHAR* str) {
@@ -532,7 +730,9 @@ class WStrList {
         return -1;
     }
 
-    bool Contains(const WCHAR* str) const { return -1 != Find(str); }
+    bool Contains(const WCHAR* str) const {
+        return -1 != Find(str);
+    }
 };
 
 // return true if vector contains el. Can't believe it's not in STL.

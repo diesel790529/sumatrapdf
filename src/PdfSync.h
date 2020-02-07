@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 // PDF-source synchronizer based on .pdfsync file
 
@@ -18,12 +18,13 @@ enum {
     PDFSYNCERR_INVALID_ARGUMENT
 };
 
-class BaseEngine;
+class EngineBase;
 
 class Synchronizer {
   public:
     explicit Synchronizer(const WCHAR* syncfilepath);
-    virtual ~Synchronizer() {}
+    virtual ~Synchronizer() {
+    }
 
     // Inverse-search:
     //  - pageNo: page number in the PDF (starting from 1)
@@ -32,7 +33,7 @@ class Synchronizer {
     //  - filename: receives the name of the source file
     //  - line: receives the line number
     //  - col: receives the column number
-    virtual int DocToSource(UINT pageNo, PointI pt, AutoFreeW& filename, UINT* line, UINT* col) = 0;
+    virtual int DocToSource(UINT pageNo, PointI pt, AutoFreeWstr& filename, UINT* line, UINT* col) = 0;
 
     // Forward-search:
     // The result is returned in page and rects (list of rectangles to highlight).
@@ -51,8 +52,8 @@ class Synchronizer {
     int RebuildIndex();
     WCHAR* PrependDir(const WCHAR* filename) const;
 
-    AutoFreeW syncfilepath; // path to the synchronization file
+    AutoFreeWstr syncfilepath; // path to the synchronization file
 
   public:
-    static int Create(const WCHAR* pdffilename, BaseEngine* engine, Synchronizer** sync);
+    static int Create(const WCHAR* pdffilename, EngineBase* engine, Synchronizer** sync);
 };

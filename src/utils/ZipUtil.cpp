@@ -1,14 +1,14 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #define __STDC_LIMIT_MACROS
-#include "BaseUtil.h"
-#include "ZipUtil.h"
+#include "utils/BaseUtil.h"
+#include "utils/ZipUtil.h"
 
-#include "ByteWriter.h"
-#include "ScopedWin.h"
-#include "DirIter.h"
-#include "FileUtil.h"
+#include "utils/ByteWriter.h"
+#include "utils/ScopedWin.h"
+#include "utils/DirIter.h"
+#include "utils/FileUtil.h"
 
 extern "C" {
 #include <unarr.h>
@@ -26,13 +26,17 @@ class FileWriteStream : public ISequentialStream {
         hFile = CreateFile(filePath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                            nullptr);
     }
-    virtual ~FileWriteStream() { CloseHandle(hFile); }
+    virtual ~FileWriteStream() {
+        CloseHandle(hFile);
+    }
     // IUnknown
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) {
         static const QITAB qit[] = {QITABENT(FileWriteStream, ISequentialStream), {0}};
         return QISearch(this, qit, riid, ppv);
     }
-    IFACEMETHODIMP_(ULONG) AddRef() { return InterlockedIncrement(&refCount); }
+    IFACEMETHODIMP_(ULONG) AddRef() {
+        return InterlockedIncrement(&refCount);
+    }
     IFACEMETHODIMP_(ULONG) Release() {
         LONG newCount = InterlockedDecrement(&refCount);
         if (newCount == 0)
@@ -160,7 +164,7 @@ bool ZipCreator::AddFileData(const char* nameUtf8, const void* data, size_t size
 
 // add a given file under (optional) nameInZip
 bool ZipCreator::AddFile(const WCHAR* filePath, const WCHAR* nameInZip) {
-    OwnedData fileData(file::ReadFile(filePath));
+    AutoFree fileData = file::ReadFile(filePath);
     if (!fileData.data) {
         return false;
     }
@@ -176,12 +180,13 @@ bool ZipCreator::AddFile(const WCHAR* filePath, const WCHAR* nameInZip) {
     }
 
     if (!nameInZip) {
-        nameInZip = path::IsAbsolute(filePath) ? path::GetBaseName(filePath) : filePath;
+        nameInZip = path::IsAbsolute(filePath) ? path::GetBaseNameNoFree(filePath) : filePath;
     }
-    OwnedData nameUtf8(str::conv::ToUtf8(nameInZip));
-    str::TransChars(nameUtf8.Get(), "\\", "/");
 
-    return AddFileData(nameUtf8.Get(), fileData.data, fileData.size, dosdatetime);
+    AutoFree nameUtf8 = strconv::WstrToUtf8(nameInZip);
+    str::TransChars(nameUtf8.get(), "\\", "/");
+
+    return AddFileData(nameUtf8.get(), fileData.get(), fileData.size(), dosdatetime);
 }
 
 // we use the filePath relative to dir as the zip name

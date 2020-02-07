@@ -1,10 +1,11 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
 #include "utils/HtmlParserLookup.h"
+#include "utils/Log.h"
+
 #include "Mui.h"
-#include "utils/DebugLog.h"
 
 namespace mui {
 
@@ -18,7 +19,8 @@ static bool BitmapNotBigEnough(Bitmap* bmp, int dx, int dy) {
     return false;
 }
 
-Painter::Painter(HwndWrapper* wnd) : wnd(wnd), cacheBmp(nullptr) {}
+Painter::Painter(HwndWrapper* wnd) : wnd(wnd), cacheBmp(nullptr) {
+}
 
 Painter::~Painter() {
     ::delete cacheBmp;

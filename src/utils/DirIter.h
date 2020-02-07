@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 /* How to use:
@@ -10,25 +10,27 @@ for (const WCHAR *filePath = di.First(); filePath; filePath = di.Next()) {
 
 */
 class DirIter {
-    bool recursive;
+    bool recursive = false;
 
     WStrVec dirsToVisit;
-    AutoFreeW startDir;
-    AutoFreeW currDir;
-    AutoFreeW currPath;
-    HANDLE currFindHandle;
-    WIN32_FIND_DATA currFindData;
-    bool foundNext;
+    AutoFreeWstr startDir;
+    AutoFreeWstr currDir;
+    AutoFreeWstr currPath;
+    HANDLE currFindHandle = nullptr;
+    WIN32_FIND_DATAW currFindData{};
+    bool foundNext = false;
 
     bool StartDirIter(const WCHAR* dir);
     bool TryNextDir();
 
   public:
-    DirIter(const WCHAR* dir, bool recursive = false)
-        : foundNext(false), currFindHandle(nullptr), recursive(recursive) {
+    DirIter(const WCHAR* dir, bool recur = false) {
+        recursive = recur;
         startDir.SetCopy(dir);
     }
-    ~DirIter() { FindClose(currFindHandle); }
+    ~DirIter() {
+        FindClose(currFindHandle);
+    }
 
     const WCHAR* First();
     const WCHAR* Next();

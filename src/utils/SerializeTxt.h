@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 struct TxtNode;
@@ -46,7 +46,7 @@ struct FieldMetadata {
     uintptr_t defValOrDefinition;
 };
 
-OwnedData Serialize(const uint8_t* data, const StructMetadata* def);
+std::string_view Serialize(const uint8_t* data, const StructMetadata* def);
 uint8_t* Deserialize(struct TxtNode* root, const StructMetadata* def);
 uint8_t* Deserialize(const std::string_view str, const StructMetadata* def);
 void FreeStruct(uint8_t* data, const StructMetadata* def);

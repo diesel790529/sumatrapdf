@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "BaseUtil.h"
@@ -20,21 +20,22 @@ static inline const char* SkipDigits(const char* s) {
 
 class ParseArgs {
   public:
-    str::Str<char> path;
+    str::Str path;
     bool canceled;
     ValueVisitor* visitor;
 
-    explicit ParseArgs(ValueVisitor* visitor) : canceled(false), visitor(visitor) {}
+    explicit ParseArgs(ValueVisitor* visitor) : canceled(false), visitor(visitor) {
+    }
 };
 
 static const char* ParseValue(ParseArgs& args, const char* data);
 
-static const char* ExtractString(str::Str<char>& string, const char* data) {
+static const char* ExtractString(str::Str& string, const char* data) {
     while (*++data) {
         if ('"' == *data)
             return data + 1;
         if ('\\' != *data) {
-            string.Append(*data);
+            string.AppendChar(*data);
             continue;
         }
         // parse escape sequence
@@ -43,22 +44,22 @@ static const char* ExtractString(str::Str<char>& string, const char* data) {
             case '"':
             case '\\':
             case '/':
-                string.Append(*data);
+                string.AppendChar(*data);
                 break;
             case 'b':
-                string.Append('\b');
+                string.AppendChar('\b');
                 break;
             case 'f':
-                string.Append('\f');
+                string.AppendChar('\f');
                 break;
             case 'n':
-                string.Append('\n');
+                string.AppendChar('\n');
                 break;
             case 'r':
-                string.Append('\r');
+                string.AppendChar('\r');
                 break;
             case 't':
-                string.Append('\t');
+                string.AppendChar('\t');
                 break;
             case 'u':
                 if (str::Parse(data + 1, "%4x", &i) && 0 < i && i < 0x10000) {
@@ -78,7 +79,7 @@ static const char* ExtractString(str::Str<char>& string, const char* data) {
 }
 
 static const char* ParseString(ParseArgs& args, const char* data) {
-    str::Str<char> string;
+    str::Str string;
     data = ExtractString(string, data);
     if (data)
         args.canceled = !args.visitor->Visit(args.path.Get(), string.Get(), Type_String);
@@ -126,7 +127,7 @@ static const char* ParseObject(ParseArgs& args, const char* data) {
         data = SkipWS(data);
         if ('"' != *data)
             return nullptr;
-        args.path.Append('/');
+        args.path.AppendChar('/');
         data = ExtractString(args.path, data);
         if (!data)
             return nullptr;

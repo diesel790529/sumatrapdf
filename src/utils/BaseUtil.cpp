@@ -1,7 +1,7 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
-#include "BaseUtil.h"
+#include "utils/BaseUtil.h"
 
 void* Allocator::Alloc(Allocator* a, size_t size) {
     if (!a) {
@@ -19,6 +19,9 @@ void* Allocator::AllocZero(Allocator* a, size_t size) {
 }
 
 void Allocator::Free(Allocator* a, void* p) {
+    if (!p) {
+        return;
+    }
     if (!a) {
         free(p);
     } else {
@@ -157,147 +160,25 @@ void* PoolAllocator::FindNthPieceOfSize(size_t size, size_t n) const {
     return nullptr;
 }
 
-OwnedData::OwnedData(const char* data, size_t size) {
-    if (size == 0) {
-        size = str::Len(data);
-    }
-    this->data = (char*)data;
-    this->size = size;
-}
-
-OwnedData::~OwnedData() {
-    free(data);
-}
-
-OwnedData::OwnedData(OwnedData&& other) {
-    CrashIf(this == &other);
-    this->data = other.data;
-    this->size = other.size;
-    other.data = nullptr;
-    other.size = 0;
-}
-
-OwnedData& OwnedData::operator=(OwnedData&& other) {
-    CrashIf(this == &other);
-    this->data = other.data;
-    this->size = other.size;
-    other.data = nullptr;
-    other.size = 0;
-    return *this;
-}
-
-bool OwnedData::IsEmpty() {
-    return (data == nullptr) || (size == 0);
-}
-
-void OwnedData::Clear() {
-    free(data);
-    data = nullptr;
-    size = 0;
-}
-
-char* OwnedData::Get() const {
-    return data;
-}
-
-std::string_view OwnedData::AsView() const {
-    return {data, size};
-}
-
-void OwnedData::TakeOwnership(const char* s, size_t size) {
-    if (size == 0) {
-        size = str::Len(s);
-    }
-    free(data);
-    data = (char*)s;
-    this->size = size;
-}
-
-OwnedData OwnedData::MakeFromStr(const char* s, size_t size) {
-    if (size == 0) {
-        return OwnedData(str::Dup(s), str::Len(s));
-    }
-
-    char* tmp = str::DupN(s, size);
-    return OwnedData(tmp, size);
-}
-
-char* OwnedData::StealData() {
-    auto* res = data;
-    data = nullptr;
-    size = 0;
-    return res;
-}
-
-MaybeOwnedData::MaybeOwnedData(char* data, size_t size, bool isOwned) {
-    Set(data, size, isOwned);
-}
-
-MaybeOwnedData::~MaybeOwnedData() {
-    freeIfOwned();
-}
-
-MaybeOwnedData::MaybeOwnedData(MaybeOwnedData&& other) {
-    CrashIf(this == &other);
-    this->data = other.data;
-    this->size = other.size;
-    this->isOwned = other.isOwned;
-    other.data = nullptr;
-    other.size = 0;
-}
-
-MaybeOwnedData& MaybeOwnedData::operator=(MaybeOwnedData&& other) {
-    CrashIf(this == &other);
-    this->data = other.data;
-    this->size = other.size;
-    this->isOwned = other.isOwned;
-    other.data = nullptr;
-    other.size = 0;
-    return *this;
-}
-
-void MaybeOwnedData::Set(char* s, size_t len, bool isOwned) {
-    freeIfOwned();
-    if (len == 0) {
-        len = str::Len(s);
-    }
-    data = s;
-    size = len;
-    this->isOwned = isOwned;
-}
-
-void MaybeOwnedData::freeIfOwned() {
-    if (isOwned) {
-        free(data);
-        data = nullptr;
-        size = 0;
-        isOwned = false;
-    }
-}
-
-OwnedData MaybeOwnedData::StealData() {
-    char* res = data;
-    size_t resSize = size;
-    if (!isOwned) {
-        res = str::DupN(data, size);
-    }
-    data = nullptr;
-    size = 0;
-    isOwned = false;
-    return OwnedData(res, resSize);
-}
-
 #if !OS_WIN
 void ZeroMemory(void* p, size_t len) {
     memset(p, 0, len);
 }
 #endif
 
+// This exits so that I can add temporary instrumentation
+// to catch allocations of a given size and it won't cause
+// re-compilation of everything caused by changing BaseUtil.h
+void* AllocZero(size_t count, size_t size) {
+    return calloc(count, size);
+}
+
 void* memdup(const void* data, size_t len) {
     void* dup = malloc(len);
-    if (dup) {
-        memcpy(dup, data, len);
+    if (!dup) {
+        return nullptr;
     }
+    memcpy(dup, data, len);
     return dup;
 }
 
@@ -382,20 +263,3 @@ uint32_t MurmurHash2(const void* key, size_t len) {
 
     return h;
 }
-
-#if OS_WIN
-BYTE GetRValueSafe(COLORREF rgb) {
-    rgb = rgb & 0xff;
-    return (BYTE)rgb;
-}
-
-BYTE GetGValueSafe(COLORREF rgb) {
-    rgb = (rgb >> 8) & 0xff;
-    return (BYTE)rgb;
-}
-
-BYTE GetBValueSafe(COLORREF rgb) {
-    rgb = (rgb >> 16) & 0xff;
-    return (BYTE)rgb;
-}
-#endif

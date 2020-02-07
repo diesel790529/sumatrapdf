@@ -1,13 +1,18 @@
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
+   License: Simplified BSD (see COPYING.BSD) */
+
 #include "utils/BaseUtil.h"
-
 #include "utils/WinUtil.h"
-#include "EditCtrl.h"
-
 #include "utils/BitManip.h"
+#include "utils/Dpi.h"
+#include "utils/Log.h"
 
-constexpr UINT_PTR SUBCLASS_ID = 1;
+#include "wingui/WinGui.h"
+#include "wingui/Layout.h"
+#include "wingui/Window.h"
+#include "wingui/EditCtrl.h"
 
-static void Unsubclass(EditCtrl* w);
+// https://docs.microsoft.com/en-us/windows/win32/controls/edit-controls
 
 // TODO:
 // - expose EN_UPDATE
@@ -17,94 +22,76 @@ static void Unsubclass(EditCtrl* w);
 //   etc., http://www.catch22.net/tuts/insert-buttons-edit-control
 // - include value we remember in WM_NCCALCSIZE in GetIdealSize()
 
-static LRESULT CALLBACK EditParentProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR uIdSubclass,
-                                       DWORD_PTR dwRefData) {
-    UNUSED(uIdSubclass);
-    EditCtrl* w = (EditCtrl*)dwRefData;
-    CrashIf(GetParent(w->hwnd) != (HWND)lp);
-    if ((WM_CTLCOLOREDIT == msg) && (w->bgBrush != nullptr)) {
-        HDC hdc = (HDC)wp;
-        // SetBkColor(hdc, w->bgCol);
-        SetBkMode(hdc, TRANSPARENT);
-        if (w->txtCol != NO_COLOR) {
-            SetTextColor(hdc, w->txtCol);
-        }
-        return (INT_PTR)w->bgBrush;
-    }
-    if (w->onTextChanged && (WM_COMMAND == msg) && (EN_CHANGE == HIWORD(wp))) {
-        w->onTextChanged(w);
-        return 0;
-    }
-    // TODO: handle WM_CTLCOLORSTATIC for read-only/disabled controls
-    return DefSubclassProc(hwnd, msg, wp, lp);
+Kind kindEdit = "edit";
+
+bool IsEdit(Kind kind) {
+    return kind == kindEdit;
 }
 
-static LRESULT CALLBACK EditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
-    UNUSED(uIdSubclass);
-    EditCtrl* w = (EditCtrl*)dwRefData;
-    CrashIf(w->hwnd != (HWND)lp);
-
-    if (w->preFilter) {
-        bool discard = false;
-        auto res = w->preFilter(hwnd, msg, wp, lp, discard);
-        if (discard) {
-            return res;
-        }
-    }
-
-    if (WM_NCDESTROY == msg) {
-        Unsubclass(w);
-        return DefSubclassProc(hwnd, msg, wp, lp);
-    }
-
-    // Node: this is sent during creation, which is too early for us (we didn't
-    // subclass the window yet)
-    // currently, we force it with SetWindowPos(... SMP_FRAMECHANGED)
-    if (WM_NCCALCSIZE == msg) {
-        NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lp;
-        RECT orig = p->rgrc[0];
-        LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
-        RECT curr = p->rgrc[0];
-        w->ncDx = RectDx(orig) - RectDx(curr);
-        w->ncDy = RectDy(orig) - RectDy(curr);
-        return res;
-    }
-
-    return DefSubclassProc(hwnd, msg, wp, lp);
+bool IsEdit(ILayout* l) {
+    return IsLayoutOfKind(l, kindEdit);
 }
 
-static void Subclass(EditCtrl* w) {
-    BOOL ok = SetWindowSubclass(w->hwnd, EditProc, SUBCLASS_ID, (DWORD_PTR)w);
-    CrashIf(!ok);
-    w->hwndSubclassId = SUBCLASS_ID;
-
-    ok = SetWindowSubclass(w->parent, EditParentProc, SUBCLASS_ID, (DWORD_PTR)w);
-    CrashIf(!ok);
-    w->hwndParentSubclassId = SUBCLASS_ID;
+ILayout* NewEditLayout(EditCtrl* e) {
+    return new WindowBaseLayout(e, kindEdit);
 }
 
-static void Unsubclass(EditCtrl* w) {
-    if (!w) {
+void EditCtrl::WndProcParent(WndProcArgs* args) {
+    EditCtrl* w = this;
+
+    UINT msg = args->msg;
+    WPARAM wp = args->wparam;
+    LPARAM lp = args->lparam;
+
+    HWND hwndCtrl = (HWND)lp;
+    if (hwndCtrl != w->hwnd) {
         return;
     }
 
-    if (w->hwndSubclassId != 0) {
-        BOOL ok = RemoveWindowSubclass(w->hwnd, EditProc, SUBCLASS_ID);
-        CrashIf(false && !ok);
-        w->hwndSubclassId = 0;
+    if (WM_CTLCOLOREDIT == msg) {
+        if (w->bgBrush == nullptr) {
+            args->result = DefSubclassProc(hwnd, msg, wp, lp);
+            return;
+        }
+        HDC hdc = (HDC)wp;
+        // SetBkColor(hdc, w->bgCol);
+        SetBkMode(hdc, TRANSPARENT);
+        if (w->textColor != ColorUnset) {
+            ::SetTextColor(hdc, w->textColor);
+        }
+        args->didHandle = true;
+        args->result = (INT_PTR)w->bgBrush;
+        return;
     }
 
-    if (w->hwndParentSubclassId != 0) {
-        BOOL ok = RemoveWindowSubclass(w->parent, EditParentProc, SUBCLASS_ID);
-        CrashIf(false && !ok);
-        w->hwndParentSubclassId = 0;
+    if (WM_COMMAND == msg) {
+        if (EN_CHANGE == HIWORD(wp)) {
+            if (w->OnTextChanged) {
+                EditTextChangedArgs eargs{};
+                eargs.procArgs = args;
+                eargs.text = w->GetText();
+                w->OnTextChanged(&eargs);
+                if (args->didHandle) {
+                    return;
+                }
+            }
+        }
+    }
+
+    // TODO: handle WM_CTLCOLORSTATIC for read-only/disabled controls
+}
+
+void EditCtrl::WndProc(WndProcArgs* args) {
+    EditCtrl* w = this;
+    if (w->msgFilter) {
+        w->msgFilter(args);
+        if (args->didHandle) {
+            return;
+        }
     }
 }
 
-void EditCtrl::SetFont(HFONT f) {
-    SetWindowFont(this->hwnd, f, TRUE);
-}
-
+#if 0
 void EditCtrl::SetColors(COLORREF txtCol, COLORREF bgCol) {
     DeleteObject(this->bgBrush);
     this->bgBrush = nullptr;
@@ -117,82 +104,91 @@ void EditCtrl::SetColors(COLORREF txtCol, COLORREF bgCol) {
     if (this->bgCol != NO_COLOR) {
         this->bgBrush = CreateSolidBrush(bgCol);
     }
-    InvalidateRect(this->hwnd, nullptr, FALSE);
 }
+#endif
 
-void EditCtrl::SetText(const WCHAR* s) {
-    SetWindowTextW(this->hwnd, s);
-}
-
-bool EditCtrl::SetCueText(const WCHAR* s) {
-    return Edit_SetCueBannerText(this->hwnd, s) == TRUE;
-}
-
-// caller must free() the result
-WCHAR* EditCtrl::GetTextW() {
-    return win::GetText(this->hwnd);
-}
-
-// caller must free() the result
-char* EditCtrl::GetText() {
-    AutoFreeW su(GetTextW());
-    return str::conv::ToUtf8(su.Get()).StealData();
-}
-
-EditCtrl::EditCtrl(HWND parent, RECT* initialPosition) {
-    this->parent = parent;
-    if (initialPosition) {
-        this->initialPos = *initialPosition;
-    } else {
-        SetRect(&this->initialPos, 0, 0, 120, 28);
+static bool HwndSetCueText(HWND hwnd, std::string_view s) {
+    if (!hwnd) {
+        return false;
     }
+    auto* ws = strconv::Utf8ToWstr(s);
+    bool ok = Edit_SetCueBannerText(hwnd, ws) == TRUE;
+    free(ws);
+    return ok;
+}
+
+bool EditCtrl::SetCueText(std::string_view s) {
+    cueText.Set(s);
+    return HwndSetCueText(hwnd, cueText.AsView());
+}
+
+void EditCtrl::SetSelection(int start, int end) {
+    Edit_SetSel(hwnd, start, end);
+}
+
+EditCtrl::EditCtrl(HWND p) : WindowBase(p) {
+    dwStyle = WS_CHILD | WS_VISIBLE | ES_LEFT | ES_AUTOHSCROLL;
+    winClass = WC_EDIT;
+    kind = kindEdit;
 }
 
 bool EditCtrl::Create() {
     // Note: has to remember this here because when I GetWindowStyle() later on,
     // WS_BORDER is not set, which is a mystery, because it is being drawn.
-    // also, WS_BORDER seems to be painted in client areay
-    this->hasBorder = bit::IsMaskSet<DWORD>(this->dwStyle, WS_BORDER);
+    // also, WS_BORDER seems to be painted in client area
+    hasBorder = bit::IsMaskSet<DWORD>(dwStyle, WS_BORDER);
 
-    RECT rc = this->initialPos;
-    this->hwnd = CreateWindowExW(this->dwExStyle, WC_EDIT, L"", this->dwStyle, rc.left, rc.top, RectDx(rc), RectDy(rc),
-                                 this->parent, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-    if (!this->hwnd) {
+    bool ok = WindowBase::Create();
+    if (!ok) {
         return false;
     }
-    SetFont(GetDefaultGuiFont());
-    Subclass(this);
+
+    HwndSetCueText(hwnd, cueText.AsView());
+    // Subclass();
+    SubclassParent();
     return true;
 }
 
 EditCtrl::~EditCtrl() {
-    DeleteObject(this->bgBrush);
+    DeleteObject(bgBrush);
 }
+
+#if 0
+    RECT curr = params->rgrc[0];
+    w->ncDx = RectDx(orig) - RectDx(curr);
+    w->ncDy = RectDy(orig) - RectDy(curr);
+    return res;
+#endif
+
+#if 0
+static void NcCalcSize(HWND hwnd, NCCALCSIZE_PARAMS* params) {
+    WPARAM wp = (WPARAM)TRUE;
+    LPARAM lp = (LPARAM)params;
+    SendMessageW(hwnd, WM_NCCALCSIZE, wp, lp);
+}
+#endif
 
 SIZE EditCtrl::GetIdealSize() {
-    // force sending WM_NCCALCSIZE
-    UINT flags = SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE;
-    SetWindowPos(this->hwnd, nullptr, 0, 0, 0, 0, flags);
-    WCHAR* txt = this->GetTextW();
-    if (str::Len(txt) == 0) {
-        free(txt);
-        txt = str::Dup(L"Sample");
-    }
-    SizeI s = TextSizeInHwnd(this->hwnd, txt);
-    free(txt);
-    SIZE res;
-    res.cx = s.dx + this->ncDx;
-    res.cy = s.dy + this->ncDy;
+    SIZE s1 = MeasureTextInHwnd(hwnd, L"Minimal", hfont);
+    // dbglogf("EditCtrl::GetIdealSize: s1.dx=%d, s2.dy=%d\n", (int)s1.cx, (int)s1.cy);
+    AutoFreeWstr txt = win::GetText(hwnd);
+    SIZE s2 = MeasureTextInHwnd(hwnd, txt, hfont);
+    // dbglogf("EditCtrl::GetIdealSize: s2.dx=%d, s2.dy=%d\n", (int)s2.cx, (int)s2.cy);
+
+    int dx = std::max(s1.cx, s2.cx);
+    int dy = std::max(s1.cy, s2.cy);
+    SIZE res{dx, dy};
+    // dbglogf("EditCtrl::GetIdealSize: dx=%d, dy=%d\n", (int)dx, (int)dy);
+
+    LRESULT margins = SendMessage(hwnd, EM_GETMARGINS, 0, 0);
+    int lm = (int)LOWORD(margins);
+    int rm = (int)HIWORD(margins);
+    res.cx += lm + rm;
 
     if (this->hasBorder) {
-        res.cx += 4;
-        res.cy += 4;
+        res.cx += DpiScale(hwnd, 4);
+        res.cy += DpiScale(hwnd, 4);
     }
-
+    // logf("EditCtrl::GetIdealSize(): dx=%d, dy=%d\n", int(res.cx), int(res.cy));
     return res;
-}
-
-void EditCtrl::SetPos(RECT* r) {
-    MoveWindow(this->hwnd, r);
 }

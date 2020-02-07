@@ -1,4 +1,4 @@
-/* Copyright 2018 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2020 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "utils/BaseUtil.h"
@@ -7,7 +7,8 @@
 
 namespace mui {
 
-DirectionalLayout::~DirectionalLayout() {}
+DirectionalLayout::~DirectionalLayout() {
+}
 
 DirectionalLayout& DirectionalLayout::Add(const DirectionalLayoutData& ld) {
     els.Append(ld);
@@ -73,7 +74,7 @@ void HorizontalLayout::Arrange(const Rect finalRect) {
     }
     RedistributeSizes(sizes, finalRect.Width);
 
-    Vec<SizeInfo>::Iter si = sizes.begin();
+    auto si = sizes.begin();
     for (DirectionalLayoutData& e : els) {
         int dy = CalcScaledClippedSize(finalRect.Height, e.sizeNonLayoutAxis, e.desiredSize.Height);
         int y = e.alignNonLayoutAxis.CalcOffset(dy, finalRect.Height);
@@ -92,7 +93,7 @@ void VerticalLayout::Arrange(const Rect finalRect) {
     }
     RedistributeSizes(sizes, finalRect.Height);
 
-    Vec<SizeInfo>::Iter si = sizes.begin();
+    auto si = sizes.begin();
     for (DirectionalLayoutData& e : els) {
         int dx = CalcScaledClippedSize(finalRect.Width, e.sizeNonLayoutAxis, e.desiredSize.Width);
         int x = e.alignNonLayoutAxis.CalcOffset(dx, finalRect.Width);
